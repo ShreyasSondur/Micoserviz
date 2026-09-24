@@ -12,7 +12,12 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [authorized, setAuthorized] = useState<boolean | null>(() => {
+    if (typeof window !== "undefined") {
+      return !!getStoredToken();
+    }
+    return null;
+  });
 
   useEffect(() => {
     const token = getStoredToken();

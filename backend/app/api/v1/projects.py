@@ -363,45 +363,35 @@ def sync_project_budget_from_commercial_stages(project_key: str, db: Session):
 
 @router.get("", response_model=List[ProjectResponse])
 def get_projects(db: Session = Depends(get_db)):
-    ensure_default_project(db)
-    projects = db.query(Project).order_by(Project.id.asc()).all()
+    # Only seed default project if database is completely empty
+    if not db.query(Project.id).first():
+        ensure_default_project(db)
+
+    from sqlalchemy.orm import selectinload
+    projects = (
+        db.query(Project)
+        .options(selectinload(Project.commercial_stages))
+        .order_by(Project.id.asc())
+        .all()
+    )
     res = []
     for p in projects:
-        comm_res = []
-        for s in p.commercial_stages:
-            comm_res.append(
-                CommercialStageResponse(
-                    id=s.id,
-                    project_key=s.project_key,
-                    stage_number=s.stage_number,
-                    status=s.status,
-                    po_number=s.po_number or "",
-                    po_date=s.po_date or "",
-                    contract_value=s.contract_value or "",
-                    is_saved=s.is_saved,
-                    documents=[DocumentItemSchema(**d) for d in s.documents],
-                    created_at=s.created_at,
-                    updated_at=s.updated_at,
-                )
+        comm_res = [
+            CommercialStageResponse(
+                id=s.id,
+                project_key=s.project_key,
+                stage_number=s.stage_number,
+                status=s.status,
+                po_number=s.po_number or "",
+                po_date=s.po_date or "",
+                contract_value=s.contract_value or "",
+                is_saved=s.is_saved,
+                documents=[DocumentItemSchema(**d) for d in (s.documents or [])],
+                created_at=s.created_at,
+                updated_at=s.updated_at,
             )
-
-        eng_res = []
-        for e in p.engineering_stages:
-            eng_res.append(
-                EngineeringStageResponse(
-                    id=e.id,
-                    project_key=e.project_key,
-                    stage_number=e.stage_number,
-                    status=e.status,
-                    documents=[DocumentItemSchema(**d) for d in e.documents],
-                    created_at=e.created_at,
-                    updated_at=e.updated_at,
-                )
-            )
-
-        costing_res = [CostingItemResponse.model_validate(c) for c in p.costing_items]
-        soa_res = [SOAItemResponse.model_validate(s) for s in p.soa_items]
-        resource_res = [ResourceItemResponse.model_validate(r) for r in p.resource_items]
+            for s in (p.commercial_stages or [])
+        ]
 
         res.append(
             ProjectResponse(
@@ -431,10 +421,10 @@ def get_projects(db: Session = Depends(get_db)):
                 verified_progress_percentage=p.verified_progress_percentage if p.verified_progress_percentage is not None else 0.0,
                 created_at=p.created_at,
                 commercial_stages=comm_res,
-                engineering_stages=eng_res,
-                costing_items=costing_res,
-                soa_items=soa_res,
-                resource_items=resource_res,
+                engineering_stages=[],
+                costing_items=[],
+                soa_items=[],
+                resource_items=[],
             )
         )
     return res
