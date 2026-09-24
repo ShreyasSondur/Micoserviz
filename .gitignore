@@ -1,0 +1,91 @@
+# ==========================================
+# MicroService Monorepo Git Ignore
+# ==========================================
+
+# Environment variables & secrets (CRITICAL: Never commit secrets)
+.env
+.env.*
+*.env
+!.env.example
+!frontend/.env.example
+!backend/.env.example
+
+# Node.js & Dependencies
+node_modules/
+**/node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js Build Outputs
+.next/
+**/.next/
+out/
+build/
+dist/
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Python Virtual Environments & Bytecode
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+**/.venv/
+venv/
+**/venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Databases & SQLite
+*.db
+*.sqlite
+*.sqlite3
+microservice.db
+backend/microservice.db
+
+# Uploaded Files & Local Storage
+storage/
+**/storage/MicroServiceData/*
+!storage/.gitkeep
+
+# Testing & Coverage
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
