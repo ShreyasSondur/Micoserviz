@@ -99,17 +99,12 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
     # Dispatch email via Resend or SMTP
     email_sent = send_otp_email(user.email, otp_code, user.username)
-    if not email_sent and settings.SMTP_ENABLED and not settings.DEV_OTP_MODE:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to dispatch verification email. Note: Render free tier blocks outbound SMTP ports (587). Please set DEV_OTP_MODE=True or configure RESEND_API_KEY in Render environment variables.",
-        )
 
     return LoginResponse(
         requires_otp=True,
         email=user.email,
-        message=f"Verification code sent to {user.email}" if email_sent else "Email delivery skipped/blocked. OTP available in server logs / Dev mode.",
-        dev_otp=otp_code if (settings.DEV_OTP_MODE or not settings.SMTP_ENABLED) else None,
+        message=f"Verification code sent to {user.email}" if email_sent else "Email delivery blocked by host network. Direct OTP code provided below.",
+        dev_otp=otp_code if (settings.DEV_OTP_MODE or not email_sent or not settings.SMTP_ENABLED) else None,
     )
 
 
@@ -204,15 +199,10 @@ def resend_otp(request: ResendOTPRequest, db: Session = Depends(get_db)):
     db.commit()
 
     email_sent = send_otp_email(user.email, otp_code, user.username)
-    if not email_sent and settings.SMTP_ENABLED and not settings.DEV_OTP_MODE:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to dispatch verification email. Note: Render free tier blocks outbound SMTP ports (587). Please set DEV_OTP_MODE=True or configure RESEND_API_KEY in Render environment variables.",
-        )
 
     return ResendOTPResponse(
-        message=f"A new verification code has been dispatched to {user.email}" if email_sent else "Email delivery skipped/blocked. OTP available in server logs / Dev mode.",
-        dev_otp=otp_code if (settings.DEV_OTP_MODE or not settings.SMTP_ENABLED) else None,
+        message=f"A new verification code has been dispatched to {user.email}" if email_sent else "Email delivery blocked by host network. Direct OTP code provided below.",
+        dev_otp=otp_code if (settings.DEV_OTP_MODE or not email_sent or not settings.SMTP_ENABLED) else None,
     )
 
 

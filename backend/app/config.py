@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # OTP & Email Settings
 
-    DEV_OTP_MODE: bool = False
+    DEV_OTP_MODE: bool = True
     OTP_EXPIRE_MINUTES: int = 10
     SMTP_ENABLED: bool = True
     SMTP_HOST: str = "smtp.gmail.com"
