@@ -15,6 +15,7 @@ function OTPVerificationContent() {
   const [resendStatus, setResendStatus] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [devOtp, setDevOtp] = useState<string | null>(null);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
@@ -28,6 +29,16 @@ function OTPVerificationContent() {
       if (stored) {
         currentEmail = stored;
         setEmail(stored);
+      }
+    }
+
+    const paramDevOtp = searchParams.get("dev_otp");
+    if (paramDevOtp) {
+      setDevOtp(paramDevOtp);
+    } else if (typeof window !== "undefined") {
+      const storedDevOtp = sessionStorage.getItem("dev_otp");
+      if (storedDevOtp) {
+        setDevOtp(storedDevOtp);
       }
     }
 
@@ -123,6 +134,12 @@ function OTPVerificationContent() {
     try {
       setErrorMessage("");
       const res = await apiResendOTP(email);
+      if (res.dev_otp) {
+        setDevOtp(res.dev_otp);
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("dev_otp", res.dev_otp);
+        }
+      }
       setResendStatus(res.message || "A new 6-digit code has been dispatched to your email.");
       setResendCooldown(45); // 45 seconds cooldown
       setTimeout(() => setResendStatus(""), 6000);
@@ -170,6 +187,32 @@ function OTPVerificationContent() {
           <div className="mb-4 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500 truncate" title={API_BASE_URL}>
             API Endpoint: <span className="font-mono text-slate-700 font-medium">{API_BASE_URL}</span>
           </div>
+
+          {/* Dev / Direct Access OTP Banner (when SMTP is blocked or in dev mode) */}
+          {devOtp && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-50/90 border border-amber-200/80 text-amber-900 text-xs">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-semibold text-amber-800 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  Direct Access OTP:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const digits = devOtp.split("").slice(0, 6);
+                    setOtp(digits);
+                    handleVerifyDirect(devOtp);
+                  }}
+                  className="px-2 py-0.5 rounded bg-amber-200/70 hover:bg-amber-200 text-amber-900 font-semibold text-[11px] transition-colors"
+                >
+                  Auto-Fill & Verify
+                </button>
+              </div>
+              <div className="font-mono text-base font-bold tracking-widest text-amber-950">
+                {devOtp}
+              </div>
+            </div>
+          )}
 
           {errorMessage && (
             <div className="mb-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2 animate-in fade-in duration-150">

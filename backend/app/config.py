@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: str = "servizwebsite@gmail.com"
     EMAILS_FROM_NAME: str = "MicroService ERP"
     EMAILS_TO_EMAIL: str = "servizwebsite@gmail.com"
+    RESEND_API_KEY: str = ""
 
     # CORS
     BACKEND_CORS_ORIGINS: Union[List[str], str] = [
@@ -72,6 +73,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3001",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
+        "https://micoserviz.vercel.app",
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")

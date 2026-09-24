@@ -5,10 +5,10 @@
  */
 
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+  (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1").replace(/\/+$/, "");
 
 export const BACKEND_ROOT_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+  (process.env.NEXT_PUBLIC_BACKEND_URL || API_BASE_URL.replace(/\/api\/v1\/?$/, "")).replace(/\/+$/, "");
 
 const TOKEN_KEY = "microservice_access_token";
 const USER_KEY = "microservice_user_profile";
@@ -154,13 +154,18 @@ export interface ResendOTPResponse {
  */
 export async function checkBackendHealth(): Promise<{ ok: boolean; data?: BackendHealthResponse; error?: string }> {
   try {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    // Allow up to 35 seconds for Render free tier spinning up from sleep
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 35000) : null;
     const res = await fetch(`${BACKEND_ROOT_URL}/health`, {
       method: "GET",
       headers: {
         "Accept": "application/json",
       },
       cache: "no-store",
+      signal: controller?.signal,
     });
+    if (timeoutId) clearTimeout(timeoutId);
 
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` };

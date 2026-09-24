@@ -106,16 +106,51 @@ TechnoLOGI Smart Automation - MicroService ERP
 </body>
 </html>"""
 
-    # If SMTP is not enabled, log to console
+    # Log OTP prominently to stdout so it appears in cloud platform logs (e.g. Render Logs tab)
+    print("\n" + "=" * 60)
+    print(f"[OTP DISPATCH] To: {destination} (User: {username} | Email: {email})")
+    print(f"[OTP CODE]: {otp_code}")
+    print(f"[EXPIRES IN]: {settings.OTP_EXPIRE_MINUTES} minutes")
+    print("=" * 60 + "\n")
+    logger.info(f"[OTP] Generated code {otp_code} for {destination}")
+
+    # 1. First attempt: Resend HTTPS API (works everywhere, immune to cloud firewall / SMTP port blocking)
+    if getattr(settings, "RESEND_API_KEY", None) and settings.RESEND_API_KEY.strip():
+        try:
+            import httpx
+            from_sender = f"{settings.EMAILS_FROM_NAME} <onboarding@resend.dev>"
+            if settings.EMAILS_FROM_EMAIL and not settings.EMAILS_FROM_EMAIL.endswith("@gmail.com"):
+                from_sender = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
+
+            resp = httpx.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {settings.RESEND_API_KEY.strip()}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": from_sender,
+                    "to": [destination],
+                    "subject": subject,
+                    "html": body_html,
+                    "text": body_text,
+                },
+                timeout=8.0,
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"[RESEND SUCCESS] Sent OTP to {destination}")
+                print(f"[RESEND SUCCESS] Real OTP email delivered via Resend HTTPS API to: {destination}")
+                return True
+            else:
+                logger.warning(f"[RESEND API WARNING] Status {resp.status_code}: {resp.text}")
+        except Exception as resend_err:
+            logger.error(f"[RESEND ERROR] Failed to dispatch via Resend: {resend_err}")
+
+    # 2. If SMTP is explicitly disabled or no credentials provided, consider local dispatch done
     if not settings.SMTP_ENABLED or not settings.SMTP_USER:
-        print("\n" + "=" * 60)
-        print(f"[LOCAL DISPATCH] To: {destination} (User: {username} | Email: {email})")
-        print(f"[OTP CODE]: {otp_code}")
-        print(f"[EXPIRES IN]: {settings.OTP_EXPIRE_MINUTES} minutes")
-        print("=" * 60 + "\n")
-        logger.info(f"[DEV OTP] Generated code {otp_code} for {destination}")
         return True
 
+    # 3. Second attempt: Direct SMTP (May be blocked by free cloud hosts like Render)
     try:
         msg = MIMEMultipart("alternative")
         msg["From"] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
@@ -126,11 +161,11 @@ TechnoLOGI Smart Automation - MicroService ERP
         msg.attach(MIMEText(body_html, "html", "utf-8"))
 
         if settings.SMTP_SSL:
-            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=6) as server:
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
                 server.sendmail(settings.EMAILS_FROM_EMAIL, [destination], msg.as_string())
         else:
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=6) as server:
                 if settings.SMTP_TLS:
                     server.starttls()
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
@@ -141,5 +176,5 @@ TechnoLOGI Smart Automation - MicroService ERP
         return True
     except Exception as e:
         logger.error(f"Failed to send email to {destination}: {e}")
-        print(f"[SMTP ERROR]: Failed to send to {destination}: {e}")
+        print(f"[SMTP ERROR]: Cloud host blocked or failed SMTP connection to {destination}: {e}")
         return False

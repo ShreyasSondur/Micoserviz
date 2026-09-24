@@ -15,9 +15,26 @@ export default function LoginPage() {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
-    checkBackendHealth().then((res) => {
-      setBackendOnline(res.ok);
-    });
+    let isMounted = true;
+    let timer: NodeJS.Timeout;
+
+    const runHealthCheck = async () => {
+      const res = await checkBackendHealth();
+      if (isMounted) {
+        setBackendOnline(res.ok);
+        // If backend was sleeping or not ready, recheck every 3.5s until online
+        if (!res.ok) {
+          timer = setTimeout(runHealthCheck, 3500);
+        }
+      }
+    };
+
+    runHealthCheck();
+
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -33,8 +50,17 @@ export default function LoginPage() {
         const destEmail = res.email || trimmed;
         if (typeof window !== "undefined") {
           sessionStorage.setItem("auth_email", destEmail);
+          if (res.dev_otp) {
+            sessionStorage.setItem("dev_otp", res.dev_otp);
+          } else {
+            sessionStorage.removeItem("dev_otp");
+          }
         }
-        router.push(`/otp?email=${encodeURIComponent(destEmail)}`);
+        const params = new URLSearchParams({ email: destEmail });
+        if (res.dev_otp) {
+          params.set("dev_otp", res.dev_otp);
+        }
+        router.push(`/otp?${params.toString()}`);
       } else {
         router.push("/overview");
       }
@@ -78,7 +104,7 @@ export default function LoginPage() {
               className={`inline-flex items-center gap-1 font-medium ${backendOnline === true
                 ? "text-emerald-600"
                 : backendOnline === false
-                  ? "text-rose-600"
+                  ? "text-amber-600"
                   : "text-slate-400"
                 }`}
             >
@@ -86,11 +112,11 @@ export default function LoginPage() {
                 className={`w-1.5 h-1.5 rounded-full ${backendOnline === true
                   ? "bg-emerald-500 animate-pulse"
                   : backendOnline === false
-                    ? "bg-rose-500"
+                    ? "bg-amber-500 animate-pulse"
                     : "bg-slate-300"
                   }`}
               />
-              {backendOnline === true ? "Online" : backendOnline === false ? "Offline" : "Checking..."}
+              {backendOnline === true ? "Online" : backendOnline === false ? "Waking server..." : "Checking..."}
             </span>
           </div>
 
