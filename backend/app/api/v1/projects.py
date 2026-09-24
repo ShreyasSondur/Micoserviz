@@ -78,8 +78,6 @@ def get_project_or_create(project_key: str, db: Session) -> Project:
     if p:
         return p
 
-    ensure_default_project(db)
-
     # Clean project creation for any new project key
     code_suffix = str(project_key).replace("p", "").replace("-", "")[:8]
     p = Project(
@@ -363,10 +361,6 @@ def sync_project_budget_from_commercial_stages(project_key: str, db: Session):
 
 @router.get("", response_model=List[ProjectResponse])
 def get_projects(db: Session = Depends(get_db)):
-    # Only seed default project if database is completely empty
-    if not db.query(Project.id).first():
-        ensure_default_project(db)
-
     from sqlalchemy.orm import selectinload
     projects = (
         db.query(Project)
