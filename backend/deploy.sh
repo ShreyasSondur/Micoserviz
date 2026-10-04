@@ -94,7 +94,7 @@ pip install gunicorn uvicorn psycopg2-binary "psycopg[binary]" httpx openpyxl
 
 echo -e "${GREEN}✓ Python dependencies installed successfully.${NC}"
 
-# 6. Setup Systemd Service Daemon
+# 6. Setup Systemd Service Daemon (Running on isolated port 8080)
 echo -e "\n${YELLOW}[6/8] Creating Systemd service for auto-restart & background execution...${NC}"
 SERVICE_FILE="/etc/systemd/system/microservice-backend.service"
 
@@ -108,7 +108,7 @@ User=root
 WorkingDirectory=$SCRIPT_DIR
 EnvironmentFile=$SCRIPT_DIR/.env
 Environment="PATH=$SCRIPT_DIR/.venv/bin"
-ExecStart=$SCRIPT_DIR/.venv/bin/gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8000
+ExecStart=$SCRIPT_DIR/.venv/bin/gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8080
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -121,23 +121,23 @@ EOF
 systemctl daemon-reload
 systemctl enable microservice-backend
 systemctl restart microservice-backend
-echo -e "${GREEN}✓ microservice-backend.service active and enabled.${NC}"
+echo -e "${GREEN}✓ microservice-backend.service active on port 8080.${NC}"
 
-# 7. Configure Nginx Reverse Proxy
-echo -e "\n${YELLOW}[7/8] Configuring Nginx Reverse Proxy...${NC}"
+# 7. Configure Dedicated Nginx Server Block (Coexists with other backends)
+echo -e "\n${YELLOW}[7/8] Configuring Nginx Server Block...${NC}"
 NGINX_CONF="/etc/nginx/sites-available/microservice-backend"
 
 cat <<'EOF' > "$NGINX_CONF"
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen 80;
+    listen [::]:80;
 
-    server_name _;
+    server_name 13.140.172.117.sslip.io;
 
     client_max_body_size 100M;
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -146,7 +146,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # Timeouts for large report generations
         proxy_connect_timeout 120s;
         proxy_send_timeout 120s;
         proxy_read_timeout 120s;
@@ -154,15 +153,13 @@ server {
 }
 EOF
 
-# Enable site and remove default
+# Enable site without deleting other existing sites
 ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/microservice-backend
-rm -f /etc/nginx/sites-enabled/default
 
 # Test Nginx and reload
 nginx -t
 systemctl reload nginx
-systemctl enable nginx
-echo -e "${GREEN}✓ Nginx reverse proxy configured and active on Port 80.${NC}"
+echo -e "${GREEN}✓ Dedicated Nginx server block active for 13.140.172.117.sslip.io (proxying to port 8080).${NC}"
 
 # 8. Health Check Verification
 echo -e "\n${YELLOW}[8/8] Verifying backend health...${NC}"
