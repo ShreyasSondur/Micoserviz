@@ -66,11 +66,10 @@ systemctl enable postgresql
 
 DB_NAME="microservicedb"
 DB_USER="microservice_user"
-DB_PASS="MicroService@2026!"
+DB_PASS="MicroService_2026_Secure"
 
-# Check if user exists, if not create
-sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 || \
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
+# Check if user exists, if not create, otherwise update password
+sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER') THEN CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS'; ELSE ALTER USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS'; END IF; END \$\$;"
 
 # Check if database exists, if not create
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 || \
