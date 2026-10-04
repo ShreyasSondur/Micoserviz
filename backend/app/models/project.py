@@ -31,6 +31,7 @@ class Project(Base):
     engineering_status = Column(String(50), nullable=False, default="not_started")
     budget_status = Column(String(50), nullable=False, default="not_started")
     procurement_status = Column(String(50), nullable=False, default="not_started")
+    soa_status = Column(String(50), nullable=False, default="not_started")
     resource_status = Column(String(50), nullable=False, default="not_started")
     site_execution_status = Column(String(50), nullable=False, default="not_started")
     handover_status = Column(String(50), nullable=False, default="not_started")
@@ -42,6 +43,7 @@ class Project(Base):
     engineering_stages = relationship("EngineeringDocumentationStage", back_populates="project", cascade="all, delete-orphan", order_by="EngineeringDocumentationStage.stage_number")
     costing_items = relationship("ProjectCostingItem", back_populates="project", cascade="all, delete-orphan", order_by="ProjectCostingItem.sl_no")
     procurement_items = relationship("ProjectProcurementItem", back_populates="project", cascade="all, delete-orphan", order_by="ProjectProcurementItem.sl_no")
+    costing_proposals = relationship("ProjectCostingProposal", back_populates="project", cascade="all, delete-orphan", order_by="ProjectCostingProposal.id.desc()")
     soa_items = relationship("ProjectSOAItem", back_populates="project", cascade="all, delete-orphan", order_by="ProjectSOAItem.id")
     resource_items = relationship("ProjectResourceItem", back_populates="project", cascade="all, delete-orphan", order_by="ProjectResourceItem.sl_no")
     site_execution_logs = relationship("ProjectSiteExecutionLog", back_populates="project", cascade="all, delete-orphan", order_by="ProjectSiteExecutionLog.id.desc()")
@@ -212,4 +214,46 @@ class ProjectProcurementItem(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     project = relationship("Project", back_populates="procurement_items")
+
+
+class ProjectCostingProposal(Base):
+    __tablename__ = "project_costing_proposals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_key = Column(String(50), ForeignKey("projects.project_key"), nullable=False, index=True)
+    change_type = Column(String(20), nullable=False) # "ADD", "EDIT", "DELETE"
+    costing_item_id = Column(Integer, nullable=True) # ID of target ProjectCostingItem if EDIT or DELETE
+    proposed_by_name = Column(String(100), default="Team Member")
+    proposed_by_role = Column(String(100), default="User")
+    original_data_json = Column(Text, default="{}") # JSON of previous item values
+    proposed_data_json = Column(Text, default="{}") # JSON of new proposed item values
+    status = Column(String(30), default="pending") # "pending", "approved", "rejected"
+    notes = Column(String(255), default="")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(String(100), nullable=True)
+
+    project = relationship("Project", back_populates="costing_proposals")
+
+    @property
+    def original_data(self):
+        try:
+            return json.loads(self.original_data_json or "{}")
+        except:
+            return {}
+
+    @original_data.setter
+    def original_data(self, val):
+        self.original_data_json = json.dumps(val or {})
+
+    @property
+    def proposed_data(self):
+        try:
+            return json.loads(self.proposed_data_json or "{}")
+        except:
+            return {}
+
+    @proposed_data.setter
+    def proposed_data(self, val):
+        self.proposed_data_json = json.dumps(val or {})
 

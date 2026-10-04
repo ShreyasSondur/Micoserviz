@@ -1449,7 +1449,12 @@ export default function InventoryPage() {
                                 {proj.remaining_qty > 0 ? `+${proj.remaining_qty}` : "0"}
                               </td>
                               <td className="py-3 px-4 text-right">
-                                {proj.status === "Added" ? (
+                                {proj.status === "Delivered to Site" ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-purple-600"></span>
+                                    <span>Delivered to Site</span>
+                                  </span>
+                                ) : proj.status === "Added" ? (
                                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
                                     <span>Added</span>

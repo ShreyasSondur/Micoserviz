@@ -64,6 +64,13 @@ interface DocumentItem {
   fileType?: string;
 }
 
+interface UploadSelectedFile {
+  name: string;
+  size: string;
+  dataUrl: string;
+  type: string;
+}
+
 interface ProcurementItem extends Partial<BackendProcurementItem> {
   id?: number;
   sl: number;
@@ -73,7 +80,7 @@ interface ProcurementItem extends Partial<BackendProcurementItem> {
   part: string;
   qty: number;
   invoiceNumber: string;
-  status: "Added" | "Partially Added" | "Yet To Order" | "Yet To Deliver" | string;
+  status: "Added" | "Partially Added" | "Yet To Order" | "Yet To Deliver" | "Delivered to Site" | string;
   allocated_qty?: number;
   remaining_qty?: number;
   available_stock?: number;
@@ -197,7 +204,6 @@ export default function ProjectDetailsPage() {
     soa: false,
     resource: false,
     siteExecution: false,
-    handover: false,
   });
 
   const toggleSection = (section: string) => {
@@ -213,7 +219,6 @@ export default function ProjectDetailsPage() {
       soa: true,
       resource: true,
       siteExecution: true,
-      handover: true,
     });
   };
 
@@ -226,7 +231,6 @@ export default function ProjectDetailsPage() {
       soa: false,
       resource: false,
       siteExecution: false,
-      handover: false,
     });
   };
 
@@ -259,7 +263,6 @@ export default function ProjectDetailsPage() {
   const [soaStatus, setSoaStatus] = useState<SectionStatusType>("not_started");
   const [resourceStatus, setResourceStatus] = useState<SectionStatusType>("not_started");
   const [siteExecutionStatus, setSiteExecutionStatus] = useState<SectionStatusType>("not_started");
-  const [handoverStatus, setHandoverStatus] = useState<SectionStatusType>("not_started");
 
   type SectionKey =
     | "commercial_status"
@@ -268,8 +271,7 @@ export default function ProjectDetailsPage() {
     | "procurement_status"
     | "soa_status"
     | "resource_status"
-    | "site_execution_status"
-    | "handover_status";
+    | "site_execution_status";
 
   const STATUS_RANKS: Record<SectionStatusType, number> = {
     not_started: 0,
@@ -286,7 +288,6 @@ export default function ProjectDetailsPage() {
       case "soa_status": return soaStatus;
       case "resource_status": return resourceStatus;
       case "site_execution_status": return siteExecutionStatus;
-      case "handover_status": return handoverStatus;
     }
   };
 
@@ -299,7 +300,6 @@ export default function ProjectDetailsPage() {
       case "soa_status": setSoaStatus(status); break;
       case "resource_status": setResourceStatus(status); break;
       case "site_execution_status": setSiteExecutionStatus(status); break;
-      case "handover_status": setHandoverStatus(status); break;
     }
   };
 
@@ -325,11 +325,10 @@ export default function ProjectDetailsPage() {
         commercial_status: "Commercial Approval",
         engineering_status: "Engineering & Documentation",
         budget_status: "Budget & Costing",
-        procurement_status: "Procurement",
-        soa_status: "SOA",
-        resource_status: "Resource Allocation",
+        procurement_status: "Procurement & Inventory Allocation",
+        soa_status: "Statement of Accounts (SOA)",
+        resource_status: "Resource Planning",
         site_execution_status: "Site Execution",
-        handover_status: "Handover",
       };
       const sectionTitle = sectionNames[sectionKey] || "Project Section";
       addActivityLog({
@@ -722,7 +721,6 @@ export default function ProjectDetailsPage() {
         if (key === rawId || p.code === rawId) return false;
         if (p.is_completed) return false;
         if (p.completed_at) return false;
-        if (p.handover_status === "completed") return false;
         return true;
       });
       setAllActiveProjects(activeOnly);
@@ -1368,9 +1366,47 @@ export default function ProjectDetailsPage() {
     { type: "commercial" | "engineering"; blockId: string; stageNumber: number } | null
   >(null);
   const [uploadDocName, setUploadDocName] = useState("");
+  const [selectedFiles, setSelectedFiles] = useState<UploadSelectedFile[]>([]);
   const [selectedFileName, setSelectedFileName] = useState("");
   const [selectedFileDataUrl, setSelectedFileDataUrl] = useState<string>("");
   const [selectedFileSize, setSelectedFileSize] = useState<string>("");
+  const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadSuccessMessage, setUploadSuccessMessage] = useState("");
+  const [recentlyUploadedDoc, setRecentlyUploadedDoc] = useState<{
+    type: "commercial" | "engineering";
+    stageNumber: number;
+    docName: string;
+  } | null>(null);
+
+  // Clean open and close helpers to prevent cached file leakage
+  const openDocModal = (target: { type: "commercial" | "engineering"; blockId: string; stageNumber: number }) => {
+    setUploadDocName("");
+    setSelectedFiles([]);
+    setSelectedFileName("");
+    setSelectedFileDataUrl("");
+    setSelectedFileSize("");
+    setIsUploadingDoc(false);
+    setUploadProgress(0);
+    setUploadSuccessMessage("");
+    const fileInput = document.getElementById("project-doc-file-input") as HTMLInputElement;
+    if (fileInput) fileInput.value = "";
+    setDocModalTarget(target);
+  };
+
+  const closeDocModal = () => {
+    setDocModalTarget(null);
+    setUploadDocName("");
+    setSelectedFiles([]);
+    setSelectedFileName("");
+    setSelectedFileDataUrl("");
+    setSelectedFileSize("");
+    setIsUploadingDoc(false);
+    setUploadProgress(0);
+    setUploadSuccessMessage("");
+    const fileInput = document.getElementById("project-doc-file-input") as HTMLInputElement;
+    if (fileInput) fileInput.value = "";
+  };
 
   // Image Proof Modal State
   const [selectedProof, setSelectedProof] = useState<SiteProgressItem | null>(null);
@@ -1400,7 +1436,7 @@ export default function ProjectDetailsPage() {
             poDate: "",
             startDate: p.start_date || "",
             currentStage: p.current_stage || 1,
-            totalStages: p.total_stages || 7,
+            totalStages: p.total_stages || 8,
             manager: p.manager || "",
             verified_progress_percentage: verifiedPct,
           });
@@ -1416,7 +1452,6 @@ export default function ProjectDetailsPage() {
           if (p.soa_status) setSoaStatus(p.soa_status);
           if (p.resource_status) setResourceStatus(p.resource_status);
           if (p.site_execution_status) setSiteExecutionStatus(p.site_execution_status);
-          if (p.handover_status) setHandoverStatus(p.handover_status);
 
           // Sync resource items from project or dedicated endpoint
           if (Array.isArray(p.resource_items) && p.resource_items.length > 0) {
@@ -1511,7 +1546,13 @@ export default function ProjectDetailsPage() {
               const totalPurchase = costingData.reduce((acc, c) => acc + (c.purchase_total || 0), 0);
               const totalSelling = costingData.reduce((acc, c) => acc + (c.selling_total || 0), 0);
               const totalProfit = totalSelling - totalPurchase;
-              const profitMargin = totalSelling > 0 ? ((totalProfit / totalSelling) * 100).toFixed(1) : "35.0";
+              let profitMargin = "25.0";
+              if (totalPurchase > 0) {
+                profitMargin = ((totalProfit / totalPurchase) * 100).toFixed(1);
+              } else if (costingData.length > 0) {
+                const sumMargins = costingData.reduce((acc, c) => acc + (Number(c.margin) || 0), 0);
+                profitMargin = (sumMargins / costingData.length).toFixed(1);
+              }
 
               setInternalCosting(totalPurchase.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
               setMargin(profitMargin);
@@ -1757,8 +1798,8 @@ export default function ProjectDetailsPage() {
           startDate: projectInfo.startDate || "N/A",
           manager: projectInfo.manager || "Admin",
           supervisor: "Site Supervisor",
-          currentStage: projectInfo.currentStage || 1,
-          totalStages: projectInfo.totalStages || 7,
+          currentStage: dynamicCurrentStage,
+          totalStages: 8,
           verifiedProgressPercentage: verifiedProgressPercentage || 0,
         },
         sectionStatuses: {
@@ -1769,7 +1810,6 @@ export default function ProjectDetailsPage() {
           soa: soaStatus,
           resource: resourceStatus,
           site_execution: siteExecutionStatus,
-          handover: handoverStatus,
         },
         activityLogs: combinedTimeline,
         commercialStages: commercialBlocks.map((b) => ({
@@ -2040,95 +2080,195 @@ export default function ProjectDetailsPage() {
     });
   };
 
+  const handleFilesSelected = (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
+
+    const validFiles = fileArray.filter((f) => {
+      if (f.size > 25 * 1024 * 1024) {
+        showToast(`File "${f.name}" exceeds 25MB limit.`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) return;
+
+    Promise.all(
+      validFiles.map(
+        (f) =>
+          new Promise<UploadSelectedFile>((resolve) => {
+            const formattedSize =
+              f.size < 1024 * 1024
+                ? `${(f.size / 1024).toFixed(1)} KB`
+                : `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
+
+            if (f.size <= 8 * 1024 * 1024) {
+              const reader = new FileReader();
+              reader.onload = () => {
+                resolve({
+                  name: f.name,
+                  size: formattedSize,
+                  dataUrl: (reader.result as string) || "",
+                  type: f.type || "application/octet-stream",
+                });
+              };
+              reader.onerror = () => {
+                resolve({
+                  name: f.name,
+                  size: formattedSize,
+                  dataUrl: "",
+                  type: f.type || "application/octet-stream",
+                });
+              };
+              reader.readAsDataURL(f);
+            } else {
+              resolve({
+                name: f.name,
+                size: formattedSize,
+                dataUrl: "",
+                type: f.type || "application/octet-stream",
+              });
+            }
+          })
+      )
+    ).then((newItems) => {
+      setSelectedFiles((prev) => [...prev, ...newItems]);
+      if (!uploadDocName.trim() && newItems.length === 1) {
+        setUploadDocName(newItems[0].name.replace(/\.[^/.]+$/, ""));
+      }
+    });
+  };
+
+  const handleRemoveSelectedFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadDocName.trim() || !docModalTarget) return;
+    if (!docModalTarget) return;
 
-    const trimmed = uploadDocName.trim();
-    const finalDocName = trimmed.includes(".") ? trimmed : `${trimmed}.pdf`;
-    const newDoc: DocumentItem = {
-      id: `doc-${Date.now()}`,
-      name: finalDocName,
-      size: selectedFileSize || (selectedFileName ? "1.8 MB" : "1.2 MB"),
-      date: new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-      fileUrl: selectedFileDataUrl || undefined,
-    };
+    if (selectedFiles.length === 0 && !uploadDocName.trim()) {
+      showToast("Please select at least one file or enter a document title.");
+      return;
+    }
+
+    setIsUploadingDoc(true);
+    setUploadProgress(20);
+    setUploadSuccessMessage("");
+
+    const targetStageNum = docModalTarget.stageNumber || 1;
+    const stageParam = String(docModalTarget.stageNumber || docModalTarget.blockId || 1);
+
+    const docsToUpload: DocumentItem[] =
+      selectedFiles.length > 0
+        ? selectedFiles.map((file, idx) => {
+            let docTitle = file.name;
+            if (selectedFiles.length === 1 && uploadDocName.trim()) {
+              const trimmed = uploadDocName.trim();
+              const ext = file.name.includes(".") ? file.name.split(".").pop() : "pdf";
+              docTitle = trimmed.includes(".") ? trimmed : `${trimmed}.${ext}`;
+            }
+            return {
+              id: `doc-${Date.now()}-${idx}`,
+              name: docTitle,
+              size: file.size,
+              date: new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+              fileUrl: file.dataUrl || undefined,
+              fileType: file.type || "application/pdf",
+            };
+          })
+        : [
+            {
+              id: `doc-${Date.now()}`,
+              name: uploadDocName.trim().includes(".") ? uploadDocName.trim() : `${uploadDocName.trim()}.pdf`,
+              size: "1.2 MB",
+              date: new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+            },
+          ];
 
     const token = getStoredToken();
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    if (docModalTarget.type === "commercial") {
-      const blockId = docModalTarget.blockId;
-      const targetStageNum = docModalTarget.stageNumber || 1;
-      try {
-        const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}/documents`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(newDoc),
-        });
-        if (res.ok) {
-          const updatedStage = await res.json();
+    const progressTimer = setInterval(() => {
+      setUploadProgress((prev) => (prev < 90 ? prev + 15 : prev));
+    }, 120);
+
+    try {
+      const endpoint =
+        docModalTarget.type === "commercial"
+          ? `${API_BASE_URL}/projects/${rawId}/commercial/${stageParam}/documents`
+          : `${API_BASE_URL}/projects/${rawId}/engineering/${stageParam}/documents`;
+
+      const payload = docsToUpload.length === 1 ? docsToUpload[0] : docsToUpload;
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      clearInterval(progressTimer);
+
+      if (res.ok) {
+        const updatedStage = await res.json();
+        setUploadProgress(100);
+        const countText =
+          docsToUpload.length === 1 ? `"${docsToUpload[0].name}"` : `${docsToUpload.length} documents`;
+        setUploadSuccessMessage(`Successfully uploaded ${countText} to Stage ${targetStageNum}!`);
+
+        if (docModalTarget.type === "commercial") {
           setCommercialBlocks((prev) =>
             prev.map((block) =>
-              block.id === blockId
-                ? { ...block, documents: Array.isArray(updatedStage.documents) ? updatedStage.documents : [...block.documents, newDoc] }
+              block.id === docModalTarget.blockId || block.stageNumber === targetStageNum
+                ? {
+                    ...block,
+                    documents: Array.isArray(updatedStage.documents)
+                      ? updatedStage.documents
+                      : [...block.documents, ...docsToUpload],
+                  }
                 : block
             )
           );
-          showToast(`Successfully uploaded: ${newDoc.name}`);
-          addActivityLog({
-            projectName: projectInfo.name,
-            module: "Commercial Approval",
-            action: `Uploaded document '${newDoc.name}' (${newDoc.size}) to Stage ${targetStageNum}`,
-            projectKey: rawId,
-          });
         } else {
-          showToast("Failed to upload document to server");
-        }
-      } catch (err) {
-        console.error("Upload failed", err);
-        showToast("Network error uploading document");
-      }
-    } else {
-      const blockId = docModalTarget.blockId;
-      const targetStageNum = docModalTarget.stageNumber || 1;
-      try {
-        const res = await fetch(`${API_BASE_URL}/projects/${rawId}/engineering/${blockId}/documents`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(newDoc),
-        });
-        if (res.ok) {
-          const updatedStage = await res.json();
           setEngineeringBlocks((prev) =>
             prev.map((block) =>
-              block.id === blockId || block.stageNumber === docModalTarget.stageNumber
-                ? { ...block, documents: Array.isArray(updatedStage.documents) ? updatedStage.documents : [...block.documents, newDoc] }
+              block.id === docModalTarget.blockId || block.stageNumber === targetStageNum
+                ? {
+                    ...block,
+                    documents: Array.isArray(updatedStage.documents)
+                      ? updatedStage.documents
+                      : [...block.documents, ...docsToUpload],
+                  }
                 : block
             )
           );
-          showToast(`Successfully uploaded: ${newDoc.name}`);
-          addActivityLog({
-            projectName: projectInfo.name,
-            module: "Engineering",
-            action: `Uploaded engineering document '${newDoc.name}' (${newDoc.size}) to Stage ${targetStageNum}`,
-            projectKey: rawId,
-          });
-        } else {
-          showToast("Failed to upload document to server");
         }
-      } catch (err) {
-        console.error("Engineering upload failed", err);
-        showToast("Network error uploading document");
-      }
-    }
 
-    setUploadDocName("");
-    setSelectedFileName("");
-    setSelectedFileDataUrl("");
-    setSelectedFileSize("");
-    setDocModalTarget(null);
+        setRecentlyUploadedDoc({
+          type: docModalTarget.type,
+          stageNumber: targetStageNum,
+          docName: docsToUpload.map((d) => d.name).join(", "),
+        });
+        setTimeout(() => setRecentlyUploadedDoc(null), 6000);
+
+        showToast(`Uploaded ${countText} to Stage ${targetStageNum}`);
+
+        setTimeout(() => {
+          closeDocModal();
+        }, 600);
+      } else {
+        setIsUploadingDoc(false);
+        setUploadProgress(0);
+        showToast("Failed to upload document to server");
+      }
+    } catch (err) {
+      clearInterval(progressTimer);
+      setIsUploadingDoc(false);
+      setUploadProgress(0);
+      console.error("Upload failed", err);
+      showToast("Network error uploading document");
+    }
   };
 
   const handleDeleteCommercialBlockDoc = (blockId: string, docId: string, name: string) => {
@@ -2290,15 +2430,20 @@ export default function ProjectDetailsPage() {
     engineeringStatus,
     budgetStatus,
     procurementStatus,
+    soaStatus,
     resourceStatus,
     siteExecutionStatus,
-    handoverStatus,
-  ], [commercialStatus, engineeringStatus, budgetStatus, procurementStatus, resourceStatus, siteExecutionStatus, handoverStatus]);
+  ], [commercialStatus, engineeringStatus, budgetStatus, procurementStatus, soaStatus, resourceStatus, siteExecutionStatus]);
 
   const completedSectionsCount = useMemo(
     () => allSectionStatuses.filter((s) => s === "completed").length,
     [allSectionStatuses]
   );
+
+  const dynamicCurrentStage = useMemo(() => {
+    if (completedSectionsCount >= 7) return 7;
+    return Math.max(1, completedSectionsCount + 1);
+  }, [completedSectionsCount]);
 
   const inProgressSectionsCount = useMemo(
     () => allSectionStatuses.filter((s) => s === "in_progress").length,
@@ -2441,7 +2586,7 @@ export default function ProjectDetailsPage() {
               <span className="text-slate-300">•</span>
               <span className="text-slate-400">Progress:</span>
               <span className="text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
-                Stage {projectInfo.currentStage || 1} of {projectInfo.totalStages || 7}
+                Stage {dynamicCurrentStage} of {projectInfo.totalStages || 7}
               </span>
             </span>
           </div>
@@ -2532,7 +2677,7 @@ export default function ProjectDetailsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
             <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/60">
               <span className="text-[10px] uppercase font-bold text-slate-400 block">Milestones Completed</span>
-              <span className="text-xs sm:text-sm font-bold text-slate-900 mt-0.5 block">{completedSectionsCount} of 7 Stages Signed</span>
+              <span className="text-xs sm:text-sm font-bold text-slate-900 mt-0.5 block">{completedSectionsCount} of 7 Stages Completed</span>
             </div>
             <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/60">
               <span className="text-[10px] uppercase font-bold text-slate-400 block">Site Execution</span>
@@ -2769,7 +2914,7 @@ export default function ProjectDetailsPage() {
                           <button
                             type="button"
                             onClick={() =>
-                              setDocModalTarget({
+                              openDocModal({
                                 type: "commercial",
                                 blockId: block.id,
                                 stageNumber: block.stageNumber,
@@ -2780,6 +2925,27 @@ export default function ProjectDetailsPage() {
                             <span>+ Add Document</span>
                           </button>
                         </div>
+
+                        {/* Recent Upload Feedback Banner */}
+                        {recentlyUploadedDoc?.type === "commercial" && recentlyUploadedDoc?.stageNumber === block.stageNumber && (
+                          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-between animate-in fade-in duration-200">
+                            <div className="flex items-center gap-2">
+                              <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[11px] font-bold flex-shrink-0">
+                                ✓
+                              </div>
+                              <div>
+                                <span>Document <strong className="text-slate-900 font-bold">"{recentlyUploadedDoc.docName}"</strong> was successfully uploaded and attached to Stage {block.stageNumber}.</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRecentlyUploadedDoc(null)}
+                              className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1.5 py-0.5 rounded cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
 
                         {block.documents.length === 0 ? (
                           <div className="p-4 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400 bg-slate-50/50">
@@ -2793,14 +2959,22 @@ export default function ProjectDetailsPage() {
                                 className="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50/70 transition-colors"
                               >
                                 <div className="flex items-center gap-3">
-                                  <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                                    doc.name.toLowerCase().endsWith(".pdf")
+                                      ? "bg-rose-50 text-rose-600"
+                                      : doc.name.toLowerCase().match(/\.(png|jpg|jpeg|webp)$/)
+                                      ? "bg-emerald-50 text-emerald-600"
+                                      : "bg-indigo-50 text-indigo-600"
+                                  }`}>
                                     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                                       <polyline points="14 2 14 8 20 8" />
                                     </svg>
                                   </div>
                                   <div>
-                                    <div className="text-xs sm:text-sm font-bold text-slate-900">{doc.name}</div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs sm:text-sm font-bold text-slate-900">{doc.name}</span>
+                                    </div>
                                     <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
                                       <span>{doc.size}</span>
                                       <span>•</span>
@@ -2817,34 +2991,53 @@ export default function ProjectDetailsPage() {
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-2">
-                                  {isAdmin() && (
+                                  <div className="flex items-center gap-1.5">
+                                    {doc.fileUrl && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (doc.fileUrl?.startsWith("data:") || doc.fileUrl?.startsWith("http")) {
+                                            window.open(doc.fileUrl, "_blank");
+                                          } else {
+                                            handleDownloadDoc(doc);
+                                          }
+                                        }}
+                                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                        title="Preview in new tab"
+                                      >
+                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                                          <circle cx="12" cy="12" r="3" />
+                                        </svg>
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
-                                      onClick={() => handleDeleteCommercialBlockDoc(block.id, doc.id, doc.name)}
-                                      className="p-1.5 rounded-lg text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                      title="Delete document"
+                                      onClick={() => handleDownloadDoc(doc)}
+                                      className="p-1.5 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                      title="Download document"
                                     >
                                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <polyline points="3 6 5 6 21 6" />
-                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                        <polyline points="7 10 12 15 17 10" />
+                                        <line x1="12" y1="15" x2="12" y2="3" />
                                       </svg>
                                     </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDownloadDoc(doc)}
-                                    className="p-1.5 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 transition-colors cursor-pointer"
-                                    title="Download document"
-                                  >
-                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                      <polyline points="7 10 12 15 17 10" />
-                                      <line x1="12" y1="15" x2="12" y2="3" />
-                                    </svg>
-                                  </button>
+                                    {isAdmin() && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteCommercialBlockDoc(block.id, doc.id, doc.name)}
+                                        className="p-1.5 rounded-lg text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                        title="Delete document"
+                                      >
+                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <polyline points="3 6 5 6 21 6" />
+                                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                        </svg>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
                             ))}
                           </div>
                         )}
@@ -2965,7 +3158,7 @@ export default function ProjectDetailsPage() {
                         <button
                           type="button"
                           onClick={() =>
-                            setDocModalTarget({
+                            openDocModal({
                               type: "engineering",
                               blockId: engBlock.id,
                               stageNumber: engBlock.stageNumber,
@@ -2978,6 +3171,27 @@ export default function ProjectDetailsPage() {
                       </div>
 
                       {/* Documents List for this Stage */}
+                      {/* Recent Upload Feedback Banner */}
+                      {recentlyUploadedDoc?.type === "engineering" && recentlyUploadedDoc?.stageNumber === engBlock.stageNumber && (
+                        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-between animate-in fade-in duration-200">
+                          <div className="flex items-center gap-2">
+                            <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[11px] font-bold flex-shrink-0">
+                              ✓
+                            </div>
+                            <div>
+                              <span>Engineering Document <strong className="text-slate-900 font-bold">"{recentlyUploadedDoc.docName}"</strong> was successfully uploaded and attached to Stage {engBlock.stageNumber}.</span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setRecentlyUploadedDoc(null)}
+                            className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1.5 py-0.5 rounded cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      )}
+
                       {engBlock.documents.length === 0 ? (
                         <div className="p-4 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400 bg-slate-50/50">
                           No engineering documents attached to Stage {engBlock.stageNumber} yet. Click <strong className="text-slate-600">+ Add Document</strong> to upload.
@@ -2990,60 +3204,87 @@ export default function ProjectDetailsPage() {
                               className="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50/70 transition-colors"
                             >
                               <div className="flex items-center gap-3">
-                                <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                                  doc.name.toLowerCase().endsWith(".pdf")
+                                    ? "bg-rose-50 text-rose-600"
+                                    : doc.name.toLowerCase().match(/\.(png|jpg|jpeg|webp)$/)
+                                    ? "bg-emerald-50 text-emerald-600"
+                                    : "bg-indigo-50 text-indigo-600"
+                                }`}>
                                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                                     <polyline points="14 2 14 8 20 8" />
                                   </svg>
                                 </div>
                                 <div>
-                                  <div className="text-xs sm:text-sm font-bold text-slate-900">{doc.name}</div>
-                                  <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
-                                    <span>{doc.size}</span>
-                                    <span>•</span>
-                                    <span className="inline-flex items-center gap-1 text-slate-500 font-medium">
-                                      <svg className="w-3 h-3 text-indigo-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                                        <line x1="16" y1="2" x2="16" y2="6" />
-                                        <line x1="8" y1="2" x2="8" y2="6" />
-                                        <line x1="3" y1="10" x2="21" y2="10" />
-                                      </svg>
-                                      {doc.date}
-                                    </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs sm:text-sm font-bold text-slate-900">{doc.name}</span>
+                                  </div>
+                                    <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                      <span>{doc.size}</span>
+                                      <span>•</span>
+                                      <span className="inline-flex items-center gap-1 text-slate-500 font-medium">
+                                        <svg className="w-3 h-3 text-indigo-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                                          <line x1="16" y1="2" x2="16" y2="6" />
+                                          <line x1="8" y1="2" x2="8" y2="6" />
+                                          <line x1="3" y1="10" x2="21" y2="10" />
+                                        </svg>
+                                        {doc.date}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
 
-                              <div className="flex items-center gap-2">
-                                {isAdmin() && (
+                                <div className="flex items-center gap-1.5">
+                                  {doc.fileUrl && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (doc.fileUrl?.startsWith("data:") || doc.fileUrl?.startsWith("http")) {
+                                          window.open(doc.fileUrl, "_blank");
+                                        } else {
+                                          handleDownloadDoc(doc);
+                                        }
+                                      }}
+                                      className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                      title="Preview in new tab"
+                                    >
+                                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                      </svg>
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
-                                    onClick={() => handleDeleteEngineeringStageDoc(engBlock.id, doc.id, doc.name)}
-                                    className="p-1.5 rounded-lg text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                    title="Delete document"
+                                    onClick={() => handleDownloadDoc(doc)}
+                                    className="p-1.5 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                    title="Download document"
                                   >
                                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                      <polyline points="3 6 5 6 21 6" />
-                                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                      <polyline points="7 10 12 15 17 10" />
+                                      <line x1="12" y1="15" x2="12" y2="3" />
                                     </svg>
                                   </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => handleDownloadDoc(doc)}
-                                  className="p-1.5 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 transition-colors cursor-pointer"
-                                  title="Download document"
-                                >
-                                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="7 10 12 15 17 10" />
-                                    <line x1="12" y1="15" x2="12" y2="3" />
-                                  </svg>
-                                </button>
+                                  {isAdmin() && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteEngineeringStageDoc(engBlock.id, doc.id, doc.name)}
+                                      className="p-1.5 rounded-lg text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                      title="Delete document"
+                                    >
+                                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <polyline points="3 6 5 6 21 6" />
+                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
                       )}
                     </div>
                   ))}
@@ -3341,24 +3582,29 @@ export default function ProjectDetailsPage() {
                                 )}
                               </td>
                               <td className="py-3.5 font-mono text-xs text-slate-500">{invNum}</td>
-                              <td className="py-3.5 text-center">
-                                {st === "Added" ? (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <td className="py-3.5 text-center cursor-pointer group/st" onClick={() => handleOpenEditProcurement(item)} title="Click to update status / allocation">
+                                {st === "Delivered to Site" ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-200 shadow-2xs group-hover/st:ring-2 group-hover/st:ring-purple-300 transition-all">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-purple-600"></span>
+                                    <span>Delivered to Site</span>
+                                  </span>
+                                ) : st === "Added" ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 group-hover/st:ring-2 group-hover/st:ring-emerald-300 transition-all">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
                                     <span>Added</span>
                                   </span>
                                 ) : st === "Partially Added" ? (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200" title={`Allocated: ${allocQty}/${reqQty} units`}>
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200 group-hover/st:ring-2 group-hover/st:ring-amber-300 transition-all" title={`Allocated: ${allocQty}/${reqQty} units`}>
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
                                     <span>Partially Added</span>
                                   </span>
                                 ) : st === "Yet To Deliver" ? (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200 group-hover/st:ring-2 group-hover/st:ring-blue-300 transition-all">
                                     <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
                                     <span>Yet To Deliver</span>
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200 group-hover/st:ring-2 group-hover/st:ring-rose-300 transition-all">
                                     <span className="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
                                     <span>Yet To Order</span>
                                   </span>
@@ -4417,7 +4663,7 @@ export default function ProjectDetailsPage() {
       {docModalTarget && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
-          onClick={() => setDocModalTarget(null)}
+          onClick={() => closeDocModal()}
         >
           <div
             className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 sm:p-7 space-y-5 animate-in zoom-in-95 duration-200"
@@ -4431,12 +4677,12 @@ export default function ProjectDetailsPage() {
                     : `Upload Engineering Document (Stage ${docModalTarget.stageNumber})`}
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Attach an invoice, agreement, PO, or engineering file to this project
+                  Attach invoices, agreements, purchase orders, or engineering drawings
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setDocModalTarget(null)}
+                onClick={() => closeDocModal()}
                 className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center cursor-pointer"
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -4448,48 +4694,35 @@ export default function ProjectDetailsPage() {
             <form onSubmit={handleUploadSubmit} className="space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Document / Invoice Title <span className="text-rose-500">*</span>
+                  Document Title {selectedFiles.length <= 1 && <span className="text-rose-500">*</span>}
                 </label>
                 <input
                   type="text"
-                  required
-                  placeholder="e.g. Tax_Invoice_INV-2026-001 or PO_Advance_Billing"
+                  required={selectedFiles.length === 0}
+                  placeholder={
+                    selectedFiles.length > 1
+                      ? "Optional for multiple files (names derived automatically)"
+                      : "e.g. Tax_Invoice_INV-2026-001 or Approved_Shop_Drawing"
+                  }
                   value={uploadDocName}
                   onChange={(e) => setUploadDocName(e.target.value)}
                   className="w-full px-3.5 py-2 text-xs sm:text-sm rounded-xl border border-slate-200 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 />
               </div>
 
-              {/* File Dropzone */}
+              {/* Multi-File Dropzone */}
               <div>
                 <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Attach File (PDF, PNG, JPG, DOCX)
+                  Attach Files (PDF, PNG, JPG, DOCX) — Multiple files allowed
                 </label>
                 <input
                   type="file"
                   id="project-doc-file-input"
+                  multiple
                   accept=".pdf,image/png,image/jpeg,image/jpg,image/webp,.doc,.docx"
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      if (file.size > 25 * 1024 * 1024) {
-                        showToast("File size exceeds 25MB limit.");
-                        return;
-                      }
-                      setSelectedFileName(file.name);
-                      setSelectedFileSize(
-                        file.size < 1024 * 1024
-                          ? `${(file.size / 1024).toFixed(1)} KB`
-                          : `${(file.size / (1024 * 1024)).toFixed(1)} MB`
-                      );
-                      if (!uploadDocName.trim()) {
-                        setUploadDocName(file.name.replace(/\.[^/.]+$/, ""));
-                      }
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        setSelectedFileDataUrl(reader.result as string);
-                      };
-                      reader.readAsDataURL(file);
+                    if (e.target.files) {
+                      handleFilesSelected(e.target.files);
                     }
                   }}
                   className="hidden"
@@ -4503,59 +4736,172 @@ export default function ProjectDetailsPage() {
                   onDrop={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) {
-                      if (file.size > 25 * 1024 * 1024) {
-                        showToast("File size exceeds 25MB limit.");
-                        return;
-                      }
-                      setSelectedFileName(file.name);
-                      setSelectedFileSize(
-                        file.size < 1024 * 1024
-                          ? `${(file.size / 1024).toFixed(1)} KB`
-                          : `${(file.size / (1024 * 1024)).toFixed(1)} MB`
-                      );
-                      if (!uploadDocName.trim()) {
-                        setUploadDocName(file.name.replace(/\.[^/.]+$/, ""));
-                      }
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        setSelectedFileDataUrl(reader.result as string);
-                      };
-                      reader.readAsDataURL(file);
+                    if (e.dataTransfer.files) {
+                      handleFilesSelected(e.dataTransfer.files);
                     }
                   }}
-                  className="p-4 border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/30 hover:bg-indigo-50/60 rounded-2xl text-center cursor-pointer transition-colors group"
+                  className={`p-4 border-2 border-dashed rounded-2xl text-center cursor-pointer transition-colors group ${
+                    selectedFiles.length > 0
+                      ? "border-emerald-300 bg-emerald-50/20 hover:bg-emerald-50/40"
+                      : "border-indigo-200 hover:border-indigo-400 bg-indigo-50/30 hover:bg-indigo-50/60"
+                  }`}
                 >
-                  <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto mb-2 group-hover:scale-110 transition-transform">
-                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center mx-auto mb-2 group-hover:scale-110 transition-transform ${
+                    selectedFiles.length > 0 ? "bg-emerald-100 text-emerald-700" : "bg-indigo-100 text-indigo-600"
+                  }`}>
+                    {selectedFiles.length > 0 ? (
+                      <svg className="w-5 h-5 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                    )}
                   </div>
                   <span className="text-xs font-bold text-slate-800 block">
-                    {selectedFileName ? `Selected: ${selectedFileName} (${selectedFileSize})` : "Click or drop file to upload"}
+                    {selectedFiles.length > 0
+                      ? `+ Click to add more files (${selectedFiles.length} selected)`
+                      : "Click or drop files to upload (Multiple files supported)"}
                   </span>
                   <span className="text-[11px] text-slate-400 block mt-0.5">
-                    PDF, DOC, DOCX, PNG, JPG up to 25MB
+                    PDF, DOC, DOCX, PNG, JPG up to 25MB each
                   </span>
                 </div>
+
+                {/* Selected Files List */}
+                {selectedFiles.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-700 px-1">
+                      <span>Selected Files ({selectedFiles.length})</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedFiles([]);
+                          const fileInput = document.getElementById("project-doc-file-input") as HTMLInputElement;
+                          if (fileInput) fileInput.value = "";
+                        }}
+                        className="text-[11px] font-semibold text-rose-500 hover:text-rose-700 cursor-pointer"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                      {selectedFiles.map((file, idx) => (
+                        <div
+                          key={`${file.name}-${idx}`}
+                          className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-3 text-xs animate-in fade-in duration-150"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[10px] flex-shrink-0 ${
+                              file.name.toLowerCase().endsWith(".pdf")
+                                ? "bg-rose-100 text-rose-700"
+                                : file.name.toLowerCase().match(/\.(png|jpg|jpeg|webp)$/)
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-blue-100 text-blue-700"
+                            }`}>
+                              {file.name.toLowerCase().endsWith(".pdf")
+                                ? "PDF"
+                                : file.name.toLowerCase().match(/\.(png|jpg|jpeg|webp)$/)
+                                ? "IMG"
+                                : "DOC"}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-800 truncate" title={file.name}>
+                                {file.name}
+                              </p>
+                              <span className="text-[10px] text-slate-400 font-medium">{file.size}</span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSelectedFile(idx)}
+                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex-shrink-0"
+                            title="Remove file"
+                          >
+                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M18 6 6 18M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Upload Progress Bar */}
+              {isUploadingDoc && (
+                <div className="space-y-2 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl animate-in fade-in duration-150">
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                    <span className="flex items-center gap-1.5">
+                      <svg className="w-3.5 h-3.5 text-indigo-600 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                      </svg>
+                      Uploading to Stage {docModalTarget.stageNumber}...
+                    </span>
+                    <span className="text-indigo-600 font-bold">{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-2 rounded-full transition-all duration-200 ease-out"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Upload Success Message in Modal */}
+              {uploadSuccessMessage && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-bold flex items-center gap-2 animate-in zoom-in-95 duration-200">
+                  <span className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs font-bold">✓</span>
+                  <span>{uploadSuccessMessage}</span>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setDocModalTarget(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                  disabled={isUploadingDoc}
+                  onClick={() => {
+                    if (!isUploadingDoc) {
+                      closeDocModal();
+                    }
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-semibold text-white bg-[#0c1033] hover:bg-[#151b54] rounded-xl shadow-xs transition-colors cursor-pointer"
+                  disabled={isUploadingDoc || (selectedFiles.length === 0 && !uploadDocName.trim())}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-[#0c1033] hover:bg-[#151b54] rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50 flex items-center gap-2"
                 >
-                  Upload Document
+                  {isUploadingDoc ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                      </svg>
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                      <span>
+                        {selectedFiles.length > 1
+                          ? `Upload ${selectedFiles.length} Documents`
+                          : "Upload Document"}
+                      </span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -4797,7 +5143,7 @@ export default function ProjectDetailsPage() {
                     Auto-updates with allocation or select manually
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                   {/* Added */}
                   <button
                     type="button"
@@ -4864,6 +5210,23 @@ export default function ProjectDetailsPage() {
                       <span className="text-xs font-bold">Yet To Order</span>
                     </div>
                     <span className="text-[10px] text-slate-500 mt-1">Needs Purchase</span>
+                  </button>
+
+                  {/* Delivered to Site */}
+                  <button
+                    type="button"
+                    onClick={() => setNewStatus("Delivered to Site")}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      newStatus === "Delivered to Site"
+                        ? "bg-purple-50 border-purple-400 text-purple-900 ring-2 ring-purple-500/20 shadow-xs"
+                        : "bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${newStatus === "Delivered to Site" ? "bg-purple-600" : "bg-slate-300"}`} />
+                      <span className="text-xs font-bold">Delivered to Site</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1">On-Site / Consumed</span>
                   </button>
                 </div>
               </div>
@@ -4995,12 +5358,14 @@ export default function ProjectDetailsPage() {
                       const val = Math.max(0, Number(e.target.value));
                       setEditAllocatedQty(val);
                       const req = editingProcItem.qty || 1;
-                      if (val >= req) {
-                        setEditStatus("Added");
-                      } else if (val > 0) {
-                        setEditStatus("Partially Added");
-                      } else if (editStatus === "Added" || editStatus === "Partially Added") {
-                        setEditStatus("Yet To Order");
+                      if (editStatus !== "Delivered to Site") {
+                        if (val >= req) {
+                          setEditStatus("Added");
+                        } else if (val > 0) {
+                          setEditStatus("Partially Added");
+                        } else if (editStatus === "Added" || editStatus === "Partially Added") {
+                          setEditStatus("Yet To Order");
+                        }
                       }
                     }}
                     className="w-full px-3.5 py-2 text-sm font-mono font-bold rounded-xl border border-slate-200 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
@@ -5013,10 +5378,12 @@ export default function ProjectDetailsPage() {
                       const effectiveAvail = stock.available + (editingProcItem.allocated_qty || 0);
                       const maxPossible = Math.min(editingProcItem.qty || 0, effectiveAvail);
                       setEditAllocatedQty(maxPossible);
-                      if (maxPossible >= (editingProcItem.qty || 0) && (editingProcItem.qty || 0) > 0) {
-                        setEditStatus("Added");
-                      } else if (maxPossible > 0) {
-                        setEditStatus("Partially Added");
+                      if (editStatus !== "Delivered to Site") {
+                        if (maxPossible >= (editingProcItem.qty || 0) && (editingProcItem.qty || 0) > 0) {
+                          setEditStatus("Added");
+                        } else if (maxPossible > 0) {
+                          setEditStatus("Partially Added");
+                        }
                       }
                     }}
                     className="px-3 py-2 text-xs font-semibold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 whitespace-nowrap cursor-pointer transition-colors"
@@ -5036,7 +5403,7 @@ export default function ProjectDetailsPage() {
                     Auto-updates with allocation or select manually
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                   {/* Added */}
                   <button
                     type="button"
@@ -5103,6 +5470,28 @@ export default function ProjectDetailsPage() {
                       <span className="text-xs font-bold">Yet To Order</span>
                     </div>
                     <span className="text-[10px] text-slate-500 mt-1">Needs Purchase</span>
+                  </button>
+
+                  {/* Delivered to Site */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditStatus("Delivered to Site");
+                      if (editAllocatedQty === 0) {
+                        setEditAllocatedQty(editingProcItem.qty || 1);
+                      }
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                      editStatus === "Delivered to Site"
+                        ? "bg-purple-50 border-purple-400 text-purple-900 ring-2 ring-purple-500/20 shadow-xs"
+                        : "bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${editStatus === "Delivered to Site" ? "bg-purple-600" : "bg-slate-300"}`} />
+                      <span className="text-xs font-bold">Delivered to Site</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1">On-Site / Consumed</span>
                   </button>
                 </div>
               </div>

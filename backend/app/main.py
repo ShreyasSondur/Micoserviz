@@ -12,6 +12,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("microservice_erp")
 
 
+import asyncio
+from app.services.b2_storage import b2_storage
+from app.services.archiver import archive_all_daily_data
+
+async def _periodic_b2_archiver():
+    """Background task that runs daily archiving periodically (every 4 hours and on startup)."""
+    while True:
+        try:
+            logger.info("Running automated Backblaze B2 daily archiving check...")
+            archive_all_daily_data()
+            logger.info("Automated Backblaze B2 daily archiving completed.")
+        except Exception as e:
+            logger.warning(f"Error in periodic B2 archiving task: {e}")
+        # Sleep for 4 hours (14,400 seconds)
+        await asyncio.sleep(14400)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: initialize database tables and seed .env admin
@@ -22,8 +39,18 @@ async def lifespan(app: FastAPI):
         logger.info("Database and Admin sync complete.")
     finally:
         db.close()
+
+    # Check Backblaze connection
+    b2_stat = b2_storage.check_connection()
+    logger.info(f"Backblaze B2 Status: {b2_stat.get('message')} (Bucket: {b2_stat.get('bucket')})")
+
+    # Start periodic background archiver task
+    archiver_task = asyncio.create_task(_periodic_b2_archiver())
+
     yield
+
     # Shutdown
+    archiver_task.cancel()
     logger.info("Shutting down MicroService ERP Backend.")
 
 

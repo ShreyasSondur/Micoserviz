@@ -174,12 +174,7 @@ function OTPVerificationContent() {
             </h1>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
               We sent a 6-digit verification code to{" "}
-              <strong className="text-slate-800 font-semibold break-all">{email || "your email"}</strong>
-              {isMockDomain && (
-                <span className="block mt-1 text-[11px] text-indigo-600 font-medium bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                  (Dispatched to active recipient: servizwebsite@gmail.com)
-                </span>
-              )}
+              <strong className="text-slate-800 font-semibold break-all">{email || "your registered email"}</strong>
             </p>
           </div>
 

@@ -2,8 +2,9 @@ import datetime
 import json
 import logging
 import re
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional, Union
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -12,6 +13,7 @@ from app.models.project import (
     CommercialApprovalStage,
     EngineeringDocumentationStage,
     ProjectCostingItem,
+    ProjectCostingProposal,
     ProjectProcurementItem,
     ProjectSOAItem,
     ProjectResourceItem,
@@ -40,6 +42,8 @@ from app.schemas.project import (
     CostingItemCreate,
     CostingItemUpdate,
     CostingItemResponse,
+    CostingProposalCreate,
+    CostingProposalResponse,
     SOAItemCreate,
     SOAItemUpdate,
     SOAItemResponse,
@@ -126,7 +130,7 @@ def ensure_default_project(db: Session) -> Project:
             code="PRJ-2024-001",
             priority="High",
             priority_level="high",
-            current_stage=4,
+            current_stage=1,
             total_stages=7,
             manager="Farhan Malik",
             supervisor="Site Supervisor 1",
@@ -380,12 +384,34 @@ def get_projects(db: Session = Depends(get_db)):
                 po_date=s.po_date or "",
                 contract_value=s.contract_value or "",
                 is_saved=s.is_saved,
-                documents=[DocumentItemSchema(**d) for d in (s.documents or [])],
+                documents=[
+                    DocumentItemSchema(
+                        id=str(d.get("id", "")),
+                        name=str(d.get("name", "")),
+                        size=str(d.get("size", "")),
+                        date=str(d.get("date", "")),
+                        fileType=d.get("fileType", None),
+                        fileUrl=d.get("fileUrl") if d.get("fileUrl") and not str(d.get("fileUrl", "")).startswith("data:") else None,
+                    )
+                    for d in (s.documents or [])
+                ],
                 created_at=s.created_at,
                 updated_at=s.updated_at,
             )
             for s in (p.commercial_stages or [])
         ]
+
+        section_statuses = [
+            p.commercial_status,
+            p.engineering_status,
+            p.budget_status,
+            p.procurement_status,
+            p.soa_status,
+            p.resource_status,
+            p.site_execution_status,
+        ]
+        completed_cnt = sum(1 for s in section_statuses if (s or "").lower() == "completed")
+        dyn_stage = 7 if (completed_cnt >= 7 or p.is_completed) else max(1, completed_cnt + 1)
 
         res.append(
             ProjectResponse(
@@ -397,21 +423,22 @@ def get_projects(db: Session = Depends(get_db)):
                 code=p.code,
                 priority=p.priority,
                 priority_level=p.priority_level,
-                current_stage=p.current_stage,
-                total_stages=p.total_stages,
+                current_stage=dyn_stage,
+                total_stages=7,
                 manager=p.manager or "Farhan Malik",
                 supervisor=p.supervisor or "Site Supervisor",
                 start_date=p.start_date,
                 budget=compute_total_contract_value(comm_res, p.budget),
-                is_completed=p.is_completed,
+                is_completed=bool(p.is_completed or completed_cnt >= 7),
                 completed_at=p.completed_at,
                 commercial_status=p.commercial_status or "not_started",
                 engineering_status=p.engineering_status or "not_started",
                 budget_status=p.budget_status or "not_started",
                 procurement_status=p.procurement_status or "not_started",
+                soa_status=p.soa_status or "not_started",
                 resource_status=p.resource_status or "not_started",
                 site_execution_status=p.site_execution_status or "not_started",
-                handover_status=p.handover_status or "not_started",
+                handover_status="not_started",
                 verified_progress_percentage=p.verified_progress_percentage if p.verified_progress_percentage is not None else 0.0,
                 created_at=p.created_at,
                 commercial_stages=comm_res,
@@ -439,8 +466,8 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
         code=data.code,
         priority=data.priority,
         priority_level=data.priority_level,
-        current_stage=data.current_stage,
-        total_stages=data.total_stages,
+        current_stage=data.current_stage or 1,
+        total_stages=8,
         manager=data.manager,
         supervisor=data.supervisor,
         start_date=data.start_date,
@@ -450,6 +477,7 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
         engineering_status=data.engineering_status or "not_started",
         budget_status=data.budget_status or "not_started",
         procurement_status=data.procurement_status or "not_started",
+        soa_status=data.soa_status or "not_started",
         resource_status=data.resource_status or "not_started",
         site_execution_status=data.site_execution_status or "not_started",
         handover_status=data.handover_status or "not_started",
@@ -512,6 +540,7 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
         engineering_status=p.engineering_status or "not_started",
         budget_status=p.budget_status or "not_started",
         procurement_status=p.procurement_status or "not_started",
+        soa_status=p.soa_status or "not_started",
         resource_status=p.resource_status or "not_started",
         site_execution_status=p.site_execution_status or "not_started",
         handover_status=p.handover_status or "not_started",
@@ -590,6 +619,18 @@ def get_project_by_key(project_key: str, db: Session = Depends(get_db)):
     soa_res = [SOAItemResponse.model_validate(s) for s in p.soa_items]
     resource_res = [ResourceItemResponse.model_validate(r) for r in p.resource_items]
 
+    section_statuses = [
+        p.commercial_status,
+        p.engineering_status,
+        p.budget_status,
+        p.procurement_status,
+        p.soa_status,
+        p.resource_status,
+        p.site_execution_status,
+    ]
+    completed_cnt = sum(1 for s in section_statuses if (s or "").lower() == "completed")
+    dyn_stage = 7 if (completed_cnt >= 7 or p.is_completed) else max(1, completed_cnt + 1)
+
     return ProjectResponse(
         id=p.id,
         project_key=p.project_key,
@@ -599,21 +640,22 @@ def get_project_by_key(project_key: str, db: Session = Depends(get_db)):
         code=p.code,
         priority=p.priority,
         priority_level=p.priority_level,
-        current_stage=p.current_stage,
-        total_stages=p.total_stages,
+        current_stage=dyn_stage,
+        total_stages=7,
         manager=p.manager or "Farhan Malik",
         supervisor=p.supervisor or "Site Supervisor",
         start_date=p.start_date,
         budget=compute_total_contract_value(comm_res, p.budget),
-        is_completed=p.is_completed,
+        is_completed=bool(p.is_completed or completed_cnt >= 7),
         completed_at=p.completed_at,
         commercial_status=p.commercial_status or "not_started",
         engineering_status=p.engineering_status or "not_started",
         budget_status=p.budget_status or "not_started",
         procurement_status=p.procurement_status or "not_started",
+        soa_status=p.soa_status or "not_started",
         resource_status=p.resource_status or "not_started",
         site_execution_status=p.site_execution_status or "not_started",
-        handover_status=p.handover_status or "not_started",
+        handover_status="not_started",
         verified_progress_percentage=p.verified_progress_percentage if p.verified_progress_percentage is not None else 0.0,
         created_at=p.created_at,
         commercial_stages=comm_res,
@@ -642,11 +684,8 @@ def update_project(project_key: str, data: ProjectUpdate, db: Session = Depends(
     if data.is_completed is not None:
         p.is_completed = bool(data.is_completed)
         if data.is_completed:
-            p.handover_status = "completed"
             p.current_stage = 7
         else:
-            if (p.handover_status or "").lower() == "completed":
-                p.handover_status = "in_progress"
             if (p.current_stage or 1) >= 7:
                 p.current_stage = 6
     if data.completed_at is not None:
@@ -657,9 +696,9 @@ def update_project(project_key: str, data: ProjectUpdate, db: Session = Depends(
         "engineering_status",
         "budget_status",
         "procurement_status",
+        "soa_status",
         "resource_status",
         "site_execution_status",
-        "handover_status",
     ]
     for field in status_fields:
         new_val = getattr(data, field, None)
@@ -667,14 +706,18 @@ def update_project(project_key: str, data: ProjectUpdate, db: Session = Depends(
             new_val_clean = new_val.lower().strip()
             if new_val_clean in ["not_started", "in_progress", "completed"]:
                 setattr(p, field, new_val_clean)
-                if field == "handover_status":
-                    if new_val_clean == "completed":
-                        p.is_completed = True
-                        p.current_stage = 7
-                    else:
-                        p.is_completed = False
-                        if (p.current_stage or 1) >= 7:
-                            p.current_stage = 6
+
+    # Dynamic stage calculation: every time a stage is completed, stage advances!
+    completed_cnt = sum(
+        1 for f in status_fields
+        if (getattr(p, f, "") or "").lower() == "completed"
+    )
+    if completed_cnt >= 7 or p.is_completed:
+        p.is_completed = True
+        p.current_stage = 7
+    else:
+        p.current_stage = max(1, completed_cnt + 1)
+    p.total_stages = 7
 
     db.commit()
     db.refresh(p)
@@ -919,33 +962,83 @@ def delete_commercial_stage(project_key: str, stage_id: int, db: Session = Depen
     return {"message": "Commercial stage deleted successfully", "id": stage_id}
 
 
-@router.post("/{project_key}/commercial/{stage_id}/documents", response_model=CommercialStageResponse)
-def add_document_to_stage(project_key: str, stage_id: int, doc: DocumentItemSchema, db: Session = Depends(get_db)):
-    stage = db.query(CommercialApprovalStage).filter(CommercialApprovalStage.id == stage_id).first()
-    if not stage:
-        p = find_project(project_key, db)
-        if p:
+def resolve_commercial_stage(project_key: str, stage_id: str, db: Session) -> CommercialApprovalStage:
+    p = find_project(project_key, db) or get_project_or_create(project_key, db)
+    numeric_id = None
+    if str(stage_id).isdigit():
+        numeric_id = int(stage_id)
+    else:
+        digits = "".join(filter(str.isdigit, str(stage_id)))
+        if digits:
+            numeric_id = int(digits)
+
+    stage = None
+    if numeric_id is not None:
+        # Match by stage_number strictly for THIS project first
+        stage = db.query(CommercialApprovalStage).filter(
+            CommercialApprovalStage.project_key == p.project_key,
+            CommercialApprovalStage.stage_number == numeric_id,
+        ).first()
+        # Next check by primary key ID strictly for THIS project
+        if not stage:
             stage = db.query(CommercialApprovalStage).filter(
                 CommercialApprovalStage.project_key == p.project_key,
-                CommercialApprovalStage.stage_number == stage_id,
+                CommercialApprovalStage.id == numeric_id,
             ).first()
+
     if not stage:
-        raise HTTPException(status_code=404, detail="Commercial stage not found")
+        st_num = numeric_id if (numeric_id and numeric_id > 0) else 1
+        stage = CommercialApprovalStage(
+            project_key=p.project_key,
+            stage_number=st_num,
+            status="in_progress",
+            po_number="",
+            po_date="",
+            contract_value="",
+            is_saved=False,
+            documents_json="[]",
+        )
+        db.add(stage)
+        db.commit()
+        db.refresh(stage)
+    return stage
 
+
+@router.post("/{project_key}/commercial/{stage_id}/documents", response_model=CommercialStageResponse)
+def add_document_to_stage(
+    project_key: str,
+    stage_id: str,
+    doc: Union[DocumentItemSchema, List[DocumentItemSchema]],
+    db: Session = Depends(get_db)
+):
+    stage = resolve_commercial_stage(project_key, stage_id, db)
+
+    items = doc if isinstance(doc, list) else [doc]
     docs = stage.documents
-    docs.append(doc.dict())
-    stage.documents = docs
+    existing_ids = {d.get("id") for d in docs if isinstance(d, dict)}
 
+    added_names = []
+    for item in items:
+        item_id = item.id
+        if not item_id or item_id in existing_ids:
+            item_id = f"doc-{datetime.datetime.utcnow().timestamp()}-{len(docs)}"
+            item.id = item_id
+        existing_ids.add(item_id)
+        docs.append(item.dict())
+        added_names.append(item.name)
+
+    stage.documents = docs
     db.commit()
     db.refresh(stage)
 
     p_obj = db.query(Project).filter(Project.project_key == stage.project_key).first()
+    summary_names = ", ".join(added_names[:3]) + (f" and {len(added_names) - 3} more" if len(added_names) > 3 else "")
     log_activity(
         db,
         user=p_obj.manager if p_obj and p_obj.manager else "Admin",
         project_name=p_obj.name if p_obj else stage.project_key,
         module="Commercial Approval",
-        action=f"Uploaded document '{doc.name}' to Stage {stage.stage_number}",
+        action=f"Uploaded {len(items)} document(s) [{summary_names}] to Stage {stage.stage_number}",
         project_key=stage.project_key,
     )
 
@@ -965,17 +1058,8 @@ def add_document_to_stage(project_key: str, stage_id: int, doc: DocumentItemSche
 
 
 @router.delete("/{project_key}/commercial/{stage_id}/documents/{doc_id}", response_model=CommercialStageResponse)
-def delete_document_from_stage(project_key: str, stage_id: int, doc_id: str, db: Session = Depends(get_db)):
-    stage = db.query(CommercialApprovalStage).filter(CommercialApprovalStage.id == stage_id).first()
-    if not stage:
-        p = find_project(project_key, db)
-        if p:
-            stage = db.query(CommercialApprovalStage).filter(
-                CommercialApprovalStage.project_key == p.project_key,
-                CommercialApprovalStage.stage_number == stage_id,
-            ).first()
-    if not stage:
-        raise HTTPException(status_code=404, detail="Commercial stage not found")
+def delete_document_from_stage(project_key: str, stage_id: str, doc_id: str, db: Session = Depends(get_db)):
+    stage = resolve_commercial_stage(project_key, stage_id, db)
 
     docs = [d for d in stage.documents if d.get("id") != doc_id]
     stage.documents = docs
@@ -1127,33 +1211,79 @@ def delete_engineering_stage(project_key: str, stage_id: int, db: Session = Depe
     return {"message": "Engineering stage deleted successfully", "id": stage_id}
 
 
-@router.post("/{project_key}/engineering/{stage_id}/documents", response_model=EngineeringStageResponse)
-def add_document_to_engineering_stage(project_key: str, stage_id: int, doc: DocumentItemSchema, db: Session = Depends(get_db)):
-    stage = db.query(EngineeringDocumentationStage).filter(EngineeringDocumentationStage.id == stage_id).first()
-    if not stage:
-        p = find_project(project_key, db)
-        if p:
+def resolve_engineering_stage(project_key: str, stage_id: str, db: Session) -> EngineeringDocumentationStage:
+    p = find_project(project_key, db) or get_project_or_create(project_key, db)
+    numeric_id = None
+    if str(stage_id).isdigit():
+        numeric_id = int(stage_id)
+    else:
+        digits = "".join(filter(str.isdigit, str(stage_id)))
+        if digits:
+            numeric_id = int(digits)
+
+    stage = None
+    if numeric_id is not None:
+        # Match by stage_number strictly for THIS project first
+        stage = db.query(EngineeringDocumentationStage).filter(
+            EngineeringDocumentationStage.project_key == p.project_key,
+            EngineeringDocumentationStage.stage_number == numeric_id,
+        ).first()
+        # Next check by primary key ID strictly for THIS project
+        if not stage:
             stage = db.query(EngineeringDocumentationStage).filter(
                 EngineeringDocumentationStage.project_key == p.project_key,
-                EngineeringDocumentationStage.stage_number == stage_id,
+                EngineeringDocumentationStage.id == numeric_id,
             ).first()
+
     if not stage:
-        raise HTTPException(status_code=404, detail="Engineering stage not found")
+        st_num = numeric_id if (numeric_id and numeric_id > 0) else 1
+        stage = EngineeringDocumentationStage(
+            project_key=p.project_key,
+            stage_number=st_num,
+            status="in_progress",
+            documents_json="[]",
+        )
+        db.add(stage)
+        db.commit()
+        db.refresh(stage)
+    return stage
 
+
+@router.post("/{project_key}/engineering/{stage_id}/documents", response_model=EngineeringStageResponse)
+def add_document_to_engineering_stage(
+    project_key: str,
+    stage_id: str,
+    doc: Union[DocumentItemSchema, List[DocumentItemSchema]],
+    db: Session = Depends(get_db)
+):
+    stage = resolve_engineering_stage(project_key, stage_id, db)
+
+    items = doc if isinstance(doc, list) else [doc]
     docs = stage.documents
-    docs.append(doc.dict())
-    stage.documents = docs
+    existing_ids = {d.get("id") for d in docs if isinstance(d, dict)}
 
+    added_names = []
+    for item in items:
+        item_id = item.id
+        if not item_id or item_id in existing_ids:
+            item_id = f"doc-{datetime.datetime.utcnow().timestamp()}-{len(docs)}"
+            item.id = item_id
+        existing_ids.add(item_id)
+        docs.append(item.dict())
+        added_names.append(item.name)
+
+    stage.documents = docs
     db.commit()
     db.refresh(stage)
 
     p_obj = db.query(Project).filter(Project.project_key == stage.project_key).first()
+    summary_names = ", ".join(added_names[:3]) + (f" and {len(added_names) - 3} more" if len(added_names) > 3 else "")
     log_activity(
         db,
         user=p_obj.manager if p_obj and p_obj.manager else "Admin",
         project_name=p_obj.name if p_obj else stage.project_key,
         module="Engineering",
-        action=f"Uploaded engineering document '{doc.name}' to Stage {stage.stage_number}",
+        action=f"Uploaded {len(items)} engineering document(s) [{summary_names}] to Stage {stage.stage_number}",
         project_key=stage.project_key,
     )
 
@@ -1169,17 +1299,8 @@ def add_document_to_engineering_stage(project_key: str, stage_id: int, doc: Docu
 
 
 @router.delete("/{project_key}/engineering/{stage_id}/documents/{doc_id}", response_model=EngineeringStageResponse)
-def delete_document_from_engineering_stage(project_key: str, stage_id: int, doc_id: str, db: Session = Depends(get_db)):
-    stage = db.query(EngineeringDocumentationStage).filter(EngineeringDocumentationStage.id == stage_id).first()
-    if not stage:
-        p = find_project(project_key, db)
-        if p:
-            stage = db.query(EngineeringDocumentationStage).filter(
-                EngineeringDocumentationStage.project_key == p.project_key,
-                EngineeringDocumentationStage.stage_number == stage_id,
-            ).first()
-    if not stage:
-        raise HTTPException(status_code=404, detail="Engineering stage not found")
+def delete_document_from_engineering_stage(project_key: str, stage_id: str, doc_id: str, db: Session = Depends(get_db)):
+    stage = resolve_engineering_stage(project_key, stage_id, db)
 
     docs = [d for d in stage.documents if d.get("id") != doc_id]
     stage.documents = docs
@@ -1346,6 +1467,162 @@ def delete_costing_item(project_key: str, item_id: int, db: Session = Depends(ge
 
 
 # =========================================================================
+# COSTING CHANGE PROPOSALS (Temporary DB for Non-Admin Review & Approval)
+# =========================================================================
+
+@router.get("/{project_key}/costing/proposals", response_model=List[CostingProposalResponse])
+def get_costing_proposals(project_key: str, db: Session = Depends(get_db)):
+    p = db.query(Project).filter((Project.project_key == project_key) | (Project.code == project_key)).first()
+    if not p:
+        return []
+    proposals = (
+        db.query(ProjectCostingProposal)
+        .filter(ProjectCostingProposal.project_key == p.project_key, ProjectCostingProposal.status == "pending")
+        .order_by(ProjectCostingProposal.id.desc())
+        .all()
+    )
+    return [CostingProposalResponse.model_validate(prop) for prop in proposals]
+
+
+@router.post("/{project_key}/costing/proposals", response_model=CostingProposalResponse, status_code=status.HTTP_201_CREATED)
+def create_costing_proposal(project_key: str, data: CostingProposalCreate, db: Session = Depends(get_db)):
+    p = db.query(Project).filter((Project.project_key == project_key) | (Project.code == project_key)).first()
+    if not p:
+        p = ensure_default_project(db)
+
+    orig_dict = {}
+    if data.change_type.upper() in ["EDIT", "DELETE"] and data.costing_item_id:
+        target_item = db.query(ProjectCostingItem).filter(ProjectCostingItem.id == data.costing_item_id).first()
+        if target_item:
+            orig_dict = {
+                "id": target_item.id,
+                "sl_no": target_item.sl_no,
+                "part_no": target_item.part_no,
+                "description": target_item.description,
+                "qty": target_item.qty,
+                "purchase_unit_price": target_item.purchase_unit_price,
+                "purchase_total": target_item.purchase_total,
+                "margin": target_item.margin,
+                "selling_margin_percent": target_item.selling_margin_percent,
+                "selling_unit_price": target_item.selling_unit_price,
+                "selling_total": target_item.selling_total,
+                "vendor": target_item.vendor,
+                "brand": target_item.brand,
+            }
+
+    proposal = ProjectCostingProposal(
+        project_key=p.project_key,
+        change_type=data.change_type.upper(),
+        costing_item_id=data.costing_item_id,
+        proposed_by_name=data.proposed_by_name or "Team Member",
+        proposed_by_role=data.proposed_by_role or "User",
+        status="pending",
+        notes=data.notes or "",
+    )
+    proposal.original_data = orig_dict
+    proposal.proposed_data = data.proposed_data or {}
+    db.add(proposal)
+    db.commit()
+    db.refresh(proposal)
+    return CostingProposalResponse.model_validate(proposal)
+
+
+@router.post("/{project_key}/costing/proposals/{proposal_id}/approve")
+def approve_costing_proposal(project_key: str, proposal_id: int, db: Session = Depends(get_db)):
+    proposal = db.query(ProjectCostingProposal).filter(ProjectCostingProposal.id == proposal_id).first()
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Costing proposal not found")
+
+    p = db.query(Project).filter((Project.project_key == project_key) | (Project.code == project_key)).first()
+    target_project_key = p.project_key if p else proposal.project_key
+
+    change_type = proposal.change_type.upper()
+    prop_data = proposal.proposed_data or {}
+
+    if change_type == "ADD":
+        qty = float(prop_data.get("qty") or 1.0)
+        p_unit = float(prop_data.get("purchase_unit_price") or 0.0)
+        margin = float(prop_data.get("margin") or 25.0)
+        s_unit = float(prop_data.get("selling_unit_price") or 0.0)
+        if s_unit <= 0:
+            s_unit = round(p_unit * (1.0 + margin / 100.0), 2)
+        p_total = round(qty * p_unit, 2)
+        s_total = round(qty * s_unit, 2)
+
+        count = db.query(ProjectCostingItem).filter(ProjectCostingItem.project_key == target_project_key).count()
+        item = ProjectCostingItem(
+            project_key=target_project_key,
+            sl_no=count + 1,
+            part_no=prop_data.get("part_no") or "",
+            description=prop_data.get("description") or "",
+            qty=qty,
+            purchase_unit_price=p_unit,
+            purchase_total=p_total,
+            margin=margin,
+            selling_margin_percent=margin,
+            selling_unit_price=s_unit,
+            selling_total=s_total,
+            vendor=prop_data.get("vendor") or "",
+            brand=prop_data.get("brand") or "",
+            invoice_number=prop_data.get("invoice_number") or "",
+            procurement_status="Yet To Order",
+            allocated_qty=0.0,
+        )
+        db.add(item)
+
+    elif change_type == "EDIT":
+        if proposal.costing_item_id:
+            item = db.query(ProjectCostingItem).filter(ProjectCostingItem.id == proposal.costing_item_id).first()
+            if item:
+                if "part_no" in prop_data and prop_data["part_no"] is not None:
+                    item.part_no = prop_data["part_no"]
+                if "description" in prop_data and prop_data["description"] is not None:
+                    item.description = prop_data["description"]
+                if "qty" in prop_data and prop_data["qty"] is not None:
+                    item.qty = float(prop_data["qty"])
+                if "purchase_unit_price" in prop_data and prop_data["purchase_unit_price"] is not None:
+                    item.purchase_unit_price = float(prop_data["purchase_unit_price"])
+                if "margin" in prop_data and prop_data["margin"] is not None:
+                    item.margin = float(prop_data["margin"])
+                    item.selling_margin_percent = float(prop_data["margin"])
+                if "selling_unit_price" in prop_data and prop_data["selling_unit_price"] is not None:
+                    item.selling_unit_price = float(prop_data["selling_unit_price"])
+                else:
+                    item.selling_unit_price = round(item.purchase_unit_price * (1.0 + item.margin / 100.0), 2)
+                item.purchase_total = round(item.qty * item.purchase_unit_price, 2)
+                item.selling_total = round(item.qty * item.selling_unit_price, 2)
+                if "vendor" in prop_data:
+                    item.vendor = prop_data["vendor"]
+                if "brand" in prop_data:
+                    item.brand = prop_data["brand"]
+
+    elif change_type == "DELETE":
+        if proposal.costing_item_id:
+            item = db.query(ProjectCostingItem).filter(ProjectCostingItem.id == proposal.costing_item_id).first()
+            if item:
+                db.delete(item)
+
+    # Temporary database record is deleted once approved
+    db.delete(proposal)
+    db.commit()
+
+    return {"message": "Proposal approved and applied successfully", "proposal_id": proposal_id}
+
+
+@router.post("/{project_key}/costing/proposals/{proposal_id}/reject")
+def reject_costing_proposal(project_key: str, proposal_id: int, db: Session = Depends(get_db)):
+    proposal = db.query(ProjectCostingProposal).filter(ProjectCostingProposal.id == proposal_id).first()
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Costing proposal not found")
+
+    # Temporary database record is deleted once rejected
+    db.delete(proposal)
+    db.commit()
+
+    return {"message": "Proposal rejected and discarded", "proposal_id": proposal_id}
+
+
+# =========================================================================
 # PROCUREMENT & INVENTORY ALLOCATION ENDPOINTS
 # =========================================================================
 
@@ -1424,12 +1701,16 @@ def create_procurement_item(project_key: str, data: ProcurementItemCreate, db: S
 
     alloc = min(alloc, req_qty)
 
-    if alloc >= req_qty and req_qty > 0:
+    if data.status and data.status.strip().lower() in ["delivered to site", "delivered_to_site", "delivered"]:
+        status_val = "Delivered to Site"
+        if alloc == 0 and req_qty > 0:
+            alloc = req_qty
+    elif alloc >= req_qty and req_qty > 0:
         status_val = "Added"
     elif alloc > 0:
         status_val = "Partially Added"
     else:
-        status_val = data.status if data.status in ["Yet To Order", "Yet To Deliver"] else "Yet To Order"
+        status_val = data.status if data.status in ["Yet To Order", "Yet To Deliver", "Delivered to Site"] else "Yet To Order"
 
     item = ProjectProcurementItem(
         project_key=p.project_key,
@@ -1497,13 +1778,23 @@ def update_procurement_item(project_key: str, item_id: int, data: ProcurementIte
 
     req = float(item.qty or 0.0)
     alloc = float(item.allocated_qty or 0.0)
-    if alloc >= req and req > 0:
+
+    target_status = data.status if data.status is not None else item.status
+    target_status_clean = (target_status or "").strip().lower()
+
+    if target_status_clean in ["delivered to site", "delivered_to_site", "delivered"]:
+        item.status = "Delivered to Site"
+        if alloc == 0 and req > 0:
+            item.allocated_qty = req
+    elif data.status is not None and data.status.strip() in ["Yet To Order", "Yet To Deliver"]:
+        item.status = data.status.strip()
+    elif alloc >= req and req > 0:
         item.status = "Added"
     elif alloc > 0:
         item.status = "Partially Added"
     elif data.status is not None:
         item.status = data.status
-    elif item.status not in ["Yet To Order", "Yet To Deliver"]:
+    elif item.status not in ["Yet To Order", "Yet To Deliver", "Delivered to Site"]:
         item.status = "Yet To Order"
 
     db.commit()
@@ -1555,7 +1846,7 @@ def shift_procurement_item(project_key: str, data: ProcurementItemShift, db: Ses
     if not src_proj:
         raise HTTPException(status_code=404, detail=f"Source project '{src_key}' not found.")
 
-    if src_proj.is_completed or src_proj.handover_status == "Completed":
+    if src_proj.is_completed:
         raise HTTPException(
             status_code=400,
             detail=f"Source project '{src_proj.name or src_key}' is completed. Materials from completed projects cannot be shifted.",
@@ -2051,6 +2342,64 @@ def delete_site_execution_log(
     )
 
     return {"message": f"Site execution log #{log_id} deleted successfully"}
+
+
+@router.post("/{project_key}/sync-dossier")
+def sync_project_dossier_to_backblaze(
+    project_key: str,
+    background_tasks: BackgroundTasks,
+    immediate: bool = False,
+    db: Session = Depends(get_db),
+):
+    """
+    Regenerates the complete project timeline history dossier PDF from start to end
+    and uploads/overwrites projects/{project_key}/timeline_history.pdf on Backblaze B2.
+    """
+    from app.services.archiver import sync_project_timeline_dossier
+    p = get_project_or_create(project_key, db)
+    
+    if immediate:
+        result = sync_project_timeline_dossier(p.project_key, db=db)
+        return result
+    else:
+        background_tasks.add_task(sync_project_timeline_dossier, p.project_key)
+        return {
+            "status": "queued",
+            "project_key": p.project_key,
+            "message": f"Dossier PDF generation & Backblaze B2 sync queued for project '{p.name}'.",
+        }
+
+
+@router.get("/{project_key}/timeline-pdf")
+def get_project_timeline_pdf(
+    project_key: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Downloads or streams the latest Master Timeline Dossier PDF for the project.
+    """
+    import io
+    from app.services.b2_storage import b2_storage
+    from app.services.archiver import sync_project_timeline_dossier
+    
+    p = get_project_or_create(project_key, db)
+    b2_key = b2_storage.format_project_timeline_key(p.project_key)
+    
+    pdf_bytes = b2_storage.download_bytes(b2_key)
+    if not pdf_bytes:
+        # Generate on the fly
+        sync_res = sync_project_timeline_dossier(p.project_key, db=db)
+        pdf_bytes = b2_storage.download_bytes(b2_key)
+        
+    if not pdf_bytes:
+        raise HTTPException(status_code=500, detail="Could not generate or retrieve project dossier PDF.")
+        
+    clean_pk = p.project_key.replace(" ", "_")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=Project_{clean_pk}_Timeline_Dossier.pdf"}
+    )
 
 
 

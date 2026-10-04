@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.invoice import Invoice
 from app.core.pdf_generator import generate_invoice_pdf_bytes
 from app.services.activity_logger import log_activity
+from app.services.b2_storage import b2_storage
 
 from app.schemas.invoice import (
     InvoiceCreate,
@@ -24,9 +25,6 @@ from app.schemas.invoice import (
 )
 
 router = APIRouter(prefix="/invoices", tags=["Invoice Management"])
-
-INVOICE_STORAGE_DIR = Path(settings.STORAGE_ROOT) / "Invoices"
-INVOICE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def format_file_size(size_in_bytes: int) -> str:
@@ -147,17 +145,19 @@ async def create_invoice(
     if file and file.filename:
         clean_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file.filename)
         saved_filename = f"{new_inv.id}_{clean_name}"
-        saved_path = INVOICE_STORAGE_DIR / saved_filename
+        b2_key = f"invoices/{saved_filename}"
 
         contents = await file.read()
-        with open(saved_path, "wb") as f_out:
-            f_out.write(contents)
-
         file_size_bytes = len(contents)
+        content_type = (file.content_type or "application/pdf")[:255]
+
+        # Upload directly to Backblaze B2
+        b2_storage.upload_bytes(b2_key, contents, content_type=content_type)
+
         new_inv.file_name = file.filename
-        new_inv.file_path = str(saved_path)
+        new_inv.file_path = b2_key
         new_inv.file_size = format_file_size(file_size_bytes)
-        new_inv.file_type = (file.content_type or "application/octet-stream")[:255]
+        new_inv.file_type = content_type
 
         db.commit()
         db.refresh(new_inv)
@@ -223,17 +223,19 @@ async def update_invoice(
     if file and file.filename:
         clean_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file.filename)
         saved_filename = f"{inv.id}_{clean_name}"
-        saved_path = INVOICE_STORAGE_DIR / saved_filename
+        b2_key = f"invoices/{saved_filename}"
 
         contents = await file.read()
-        with open(saved_path, "wb") as f_out:
-            f_out.write(contents)
-
         file_size_bytes = len(contents)
+        content_type = (file.content_type or "application/pdf")[:255]
+
+        # Upload directly to Backblaze B2
+        b2_storage.upload_bytes(b2_key, contents, content_type=content_type)
+
         inv.file_name = file.filename
-        inv.file_path = str(saved_path)
+        inv.file_path = b2_key
         inv.file_size = format_file_size(file_size_bytes)
-        inv.file_type = (file.content_type or "application/octet-stream")[:255]
+        inv.file_type = content_type
 
     db.commit()
     db.refresh(inv)
@@ -279,6 +281,54 @@ def delete_invoice(
     return {"message": f"Invoice {inv.invoice_number} successfully removed", "id": invoice_id}
 
 
+def _serve_invoice_content(inv: Optional[Invoice], inline: bool = False, invoice_num_fallback: str = "") -> Response:
+    """Helper to serve invoice from Backblaze B2, local file fallback, or generate dynamic PDF."""
+    if inv and inv.file_path:
+        # 1. Try Backblaze B2
+        b2_bytes = b2_storage.download_bytes(inv.file_path)
+        if b2_bytes:
+            filename = inv.file_name or f"Invoice_{inv.invoice_number}.pdf"
+            disposition = "inline" if inline else "attachment"
+            return Response(
+                content=b2_bytes,
+                media_type=inv.file_type or "application/pdf",
+                headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+            )
+
+        # 2. Try Local File fallback if exists
+        if os.path.exists(inv.file_path):
+            return FileResponse(
+                path=inv.file_path,
+                filename=inv.file_name or f"Invoice_{inv.invoice_number}.pdf",
+                media_type=inv.file_type or "application/pdf",
+                headers={"Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{inv.file_name or f"Invoice_{inv.invoice_number}.pdf"}"'} if inline else None,
+            )
+
+    # 3. Dynamic PDF Generation
+    inv_num = inv.invoice_number if inv else invoice_num_fallback
+    vendor_name = inv.vendor if inv else "Corporate Procurement"
+    inv_date = inv.invoice_date if inv else date.today().isoformat()
+    amount = inv.total_amount if inv else 15000.0
+    status_label = inv.status if inv else "Verified"
+    currency = inv.currency if inv else "AED"
+
+    pdf_bytes = generate_invoice_pdf_bytes(
+        invoice_number=inv_num,
+        vendor=vendor_name or "Corporate Procurement",
+        invoice_date=inv_date,
+        total_amount=amount,
+        currency=currency,
+        status=status_label,
+    )
+
+    disposition = "inline" if inline else "attachment"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="Invoice_{inv_num}.pdf"'},
+    )
+
+
 @router.get("/by-number/{invoice_number}/download")
 def download_invoice_by_number(
     invoice_number: str,
@@ -290,34 +340,7 @@ def download_invoice_by_number(
         Invoice.invoice_number.ilike(inv_num),
         Invoice.is_active == True,
     ).first()
-
-    if inv and inv.file_path and os.path.exists(inv.file_path):
-        return FileResponse(
-            path=inv.file_path,
-            filename=inv.file_name or f"Invoice_{inv.invoice_number}.pdf",
-            media_type=inv.file_type or "application/pdf",
-        )
-
-    # If invoice exists in DB but no physical file on disk, or if not found in DB
-    vendor_name = inv.vendor if inv else "Corporate Procurement"
-    inv_date = inv.invoice_date if inv else date.today().isoformat()
-    amount = inv.total_amount if inv else 15000.0
-    status_label = inv.status if inv else "Verified"
-
-    pdf_bytes = generate_invoice_pdf_bytes(
-        invoice_number=inv_num,
-        vendor=vendor_name or "Corporate Procurement",
-        invoice_date=inv_date,
-        total_amount=amount,
-        currency="AED",
-        status=status_label,
-    )
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="Invoice_{inv_num}.pdf"'},
-    )
+    return _serve_invoice_content(inv, inline=False, invoice_num_fallback=inv_num)
 
 
 @router.get("/{invoice_id}/download")
@@ -332,29 +355,7 @@ def download_invoice_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invoice not found",
         )
-
-    if inv.file_path and os.path.exists(inv.file_path):
-        return FileResponse(
-            path=inv.file_path,
-            filename=inv.file_name or f"Invoice_{inv.invoice_number}.pdf",
-            media_type=inv.file_type or "application/pdf",
-        )
-
-    # Generate professional PDF on the fly if file is not stored physically
-    pdf_bytes = generate_invoice_pdf_bytes(
-        invoice_number=inv.invoice_number,
-        vendor=inv.vendor or "Corporate Procurement",
-        invoice_date=inv.invoice_date,
-        total_amount=inv.total_amount,
-        currency=inv.currency or "AED",
-        status=inv.status or "Verified",
-    )
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="Invoice_{inv.invoice_number}.pdf"'},
-    )
+    return _serve_invoice_content(inv, inline=False, invoice_num_fallback=inv.invoice_number)
 
 
 @router.get("/{invoice_id}/preview")
@@ -369,27 +370,5 @@ def preview_invoice_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invoice not found",
         )
-
-    if inv.file_path and os.path.exists(inv.file_path):
-        return FileResponse(
-            path=inv.file_path,
-            media_type=inv.file_type or "application/pdf",
-            headers={"Content-Disposition": f"inline; filename=\"{inv.file_name or 'invoice.pdf'}\""},
-        )
-
-    # Generate professional PDF on the fly for inline preview
-    pdf_bytes = generate_invoice_pdf_bytes(
-        invoice_number=inv.invoice_number,
-        vendor=inv.vendor or "Corporate Procurement",
-        invoice_date=inv.invoice_date,
-        total_amount=inv.total_amount,
-        currency=inv.currency or "AED",
-        status=inv.status or "Verified",
-    )
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="Invoice_{inv.invoice_number}.pdf"'},
-    )
+    return _serve_invoice_content(inv, inline=True, invoice_num_fallback=inv.invoice_number)
 

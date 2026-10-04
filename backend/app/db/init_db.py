@@ -18,6 +18,7 @@ def _apply_sqlite_safeguards():
             "engineering_status",
             "budget_status",
             "procurement_status",
+            "soa_status",
             "resource_status",
             "site_execution_status",
             "handover_status",
@@ -54,6 +55,12 @@ def _apply_sqlite_safeguards():
 
         try:
             conn.execute(text("ALTER TABLE projects ADD COLUMN verified_progress_percentage FLOAT DEFAULT 0.0"))
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
+            conn.execute(text("UPDATE projects SET total_stages = 7 WHERE total_stages != 7 OR total_stages IS NULL"))
             conn.commit()
         except Exception:
             pass
@@ -126,6 +133,30 @@ def _apply_sqlite_safeguards():
         except Exception as e:
             logger.warning(f"Procurement table check: {e}")
 
+        # Create project_costing_proposals table if not exists (Temporary table for non-admin proposed changes)
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS project_costing_proposals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_key VARCHAR(50) NOT NULL,
+                    change_type VARCHAR(20) NOT NULL,
+                    costing_item_id INTEGER,
+                    proposed_by_name VARCHAR(100) DEFAULT 'Team Member',
+                    proposed_by_role VARCHAR(100) DEFAULT 'User',
+                    original_data_json TEXT DEFAULT '{}',
+                    proposed_data_json TEXT DEFAULT '{}',
+                    status VARCHAR(30) DEFAULT 'pending',
+                    notes VARCHAR(255) DEFAULT '',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    reviewed_at DATETIME,
+                    reviewed_by VARCHAR(100),
+                    FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                )
+            """))
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"Costing proposals table check: {e}")
+
 
 def init_db(db: Session) -> None:
     # 1. Create tables natively via SQLAlchemy models
@@ -135,12 +166,24 @@ def init_db(db: Session) -> None:
     if engine.dialect.name == "sqlite":
         _apply_sqlite_safeguards()
 
-    # 2. Sync Admin from .env
-    admin_user = db.query(User).filter(
-        (User.username == settings.ADMIN_USERNAME) |
-        (User.email == settings.ADMIN_EMAIL) |
-        (User.is_env_admin == True)
-    ).first()
+    # 2. Sync Admin from .env safely without unique constraint collisions
+    by_username = db.query(User).filter(User.username == settings.ADMIN_USERNAME).first()
+    by_email = db.query(User).filter(User.email == settings.ADMIN_EMAIL).first()
+
+    if by_username and by_email and by_username.id != by_email.id:
+        from app.models.otp import OTPVerification
+        db.query(OTPVerification).filter(OTPVerification.user_id == by_email.id).update(
+            {"user_id": by_username.id}, synchronize_session=False
+        )
+        db.delete(by_email)
+        db.flush()
+        admin_user = by_username
+    elif by_username:
+        admin_user = by_username
+    elif by_email:
+        admin_user = by_email
+    else:
+        admin_user = db.query(User).filter(User.is_env_admin == True).first()
 
     if not admin_user:
         admin_user = User(
@@ -156,7 +199,7 @@ def init_db(db: Session) -> None:
         db.refresh(admin_user)
         logger.info(f"Initialized Admin account: {admin_user.username} ({admin_user.email})")
     else:
-        # Update credentials to match .env if changed
+        # Update credentials to match .env
         admin_user.username = settings.ADMIN_USERNAME
         admin_user.email = settings.ADMIN_EMAIL
         admin_user.hashed_password = get_password_hash(settings.ADMIN_PASSWORD)

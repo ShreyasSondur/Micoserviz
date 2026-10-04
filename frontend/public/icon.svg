@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#4338CA" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded Squircle Background -->
+  <rect width="64" height="64" rx="16" fill="url(#bgGrad)" />
+  
+  <!-- Dashboard 4-Tile Grid (Overview Dashboard) -->
+  <rect x="12" y="12" width="18" height="18" rx="5" fill="#FFFFFF" />
+  <rect x="34" y="12" width="18" height="18" rx="5" fill="#C7D2FE" fill-opacity="0.95" />
+  <rect x="12" y="34" width="18" height="18" rx="5" fill="#A5B4FC" fill-opacity="0.95" />
+  <rect x="34" y="34" width="18" height="18" rx="5" fill="#FFFFFF" />
+</svg>

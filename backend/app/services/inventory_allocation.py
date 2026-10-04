@@ -53,28 +53,30 @@ def recalculate_allocations_for_part(part_number: str, db: Session) -> Dict[str,
         if not proj:
             proj = db.query(Project).filter(Project.project_key == item.project_key).first()
 
-        is_completed = bool(
-            proj and (
-                proj.is_completed
-                or (proj.handover_status or "").strip().lower() == "completed"
-                or (proj.current_stage is not None and proj.current_stage >= 7 and (proj.handover_status or "").strip().lower() == "completed")
-            )
-        )
+        item_st = (getattr(item, "status", None) or getattr(item, "procurement_status", "") or "").strip().lower()
+        is_delivered_to_site = item_st in ["delivered to site", "delivered_to_site", "delivered"]
+        is_completed = bool((proj and proj.is_completed) or is_delivered_to_site)
         if is_completed:
             completed_items.append(item)
         else:
             active_items.append(item)
 
     # 3. Stock Pool calculation
-    # Completed projects: units physically installed / consumed on site (they have left the warehouse)
+    # Completed projects / Delivered to site items: units physically installed / consumed on site (they have left the warehouse)
     total_consumed_by_completed = 0.0
     for item in completed_items:
         req = float(item.qty or 0.0)
         alloc = min(float(item.allocated_qty or 0.0), req) if item.allocated_qty else req
+        if alloc <= 0 and req > 0:
+            alloc = req
         item.allocated_qty = alloc
         total_consumed_by_completed += alloc
 
-        new_status = "Added" if alloc >= req and req > 0 else ("Partially Added" if alloc > 0 else getattr(item, "status", getattr(item, "procurement_status", "Yet To Order")))
+        item_st = (getattr(item, "status", None) or getattr(item, "procurement_status", "") or "").strip().lower()
+        if item_st in ["delivered to site", "delivered_to_site", "delivered"]:
+            new_status = "Delivered to Site"
+        else:
+            new_status = "Added" if alloc >= req and req > 0 else ("Partially Added" if alloc > 0 else getattr(item, "status", getattr(item, "procurement_status", "Yet To Order")))
         if hasattr(item, "status"):
             item.status = new_status
         if hasattr(item, "procurement_status"):
@@ -255,13 +257,9 @@ def get_part_full_details(part_number: str, db: Session) -> Dict[str, Any]:
     )
     for it in all_proc_items:
         proj = it.project or db.query(Project).filter(Project.project_key == it.project_key).first()
-        is_completed = bool(
-            proj and (
-                proj.is_completed
-                or (proj.handover_status or "").strip().lower() == "completed"
-                or (proj.current_stage is not None and proj.current_stage >= 7 and (proj.handover_status or "").strip().lower() == "completed")
-            )
-        )
+        it_st = (getattr(it, "status", None) or getattr(it, "procurement_status", "") or "").strip().lower()
+        is_delivered = it_st in ["delivered to site", "delivered_to_site", "delivered"]
+        is_completed = bool((proj and proj.is_completed) or is_delivered)
         if is_completed:
             c_need = float(it.allocated_qty or it.qty or 0.0)
             for b in inbound_batches:
@@ -277,12 +275,8 @@ def get_part_full_details(part_number: str, db: Session) -> Dict[str, Any]:
     active_proc = [
         it for it in all_proc_items
         if not bool(
-            (it.project or db.query(Project).filter(Project.project_key == it.project_key).first())
-            and (
-                (it.project or db.query(Project).filter(Project.project_key == it.project_key).first()).is_completed
-                or ((it.project or db.query(Project).filter(Project.project_key == it.project_key).first()).handover_status or "").strip().lower() == "completed"
-                or ((it.project or db.query(Project).filter(Project.project_key == it.project_key).first()).current_stage is not None and (it.project or db.query(Project).filter(Project.project_key == it.project_key).first()).current_stage >= 7 and ((it.project or db.query(Project).filter(Project.project_key == it.project_key).first()).handover_status or "").strip().lower() == "completed")
-            )
+            ((it.project or db.query(Project).filter(Project.project_key == it.project_key).first()) and (it.project or db.query(Project).filter(Project.project_key == it.project_key).first()).is_completed)
+            or ((getattr(it, "status", None) or getattr(it, "procurement_status", "") or "").strip().lower() in ["delivered to site", "delivered_to_site", "delivered"])
         ) and float(it.allocated_qty or 0.0) > 0
     ]
 

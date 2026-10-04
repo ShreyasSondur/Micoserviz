@@ -15,17 +15,17 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = f"sqlite:///{BACKEND_DIR / 'microservice.db'}"
 
-    # Admin Special Access Credentials (from .env)
+    # Admin Special Access Credentials (loaded from .env)
     ADMIN_USERNAME: str = "admin"
     ADMIN_EMAIL: str = "admin@microservice.io"
-    ADMIN_PASSWORD: str = "Admin@2026!"
+    ADMIN_PASSWORD: str = ""
 
     # JWT
-    JWT_SECRET: str = "e9c40b8a4f61f7d23a54b9d031c28741e9b27d4c82f912e7539bc27a1348e025"
+    JWT_SECRET: str = "microservice-jwt-secret-key-change-in-production-2026"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
 
-    # Storage Root
+    # Storage Root (Used only if local fallback is required)
     STORAGE_ROOT: str = str(BACKEND_DIR / "storage" / "MicroServiceData")
 
     @field_validator("DATABASE_URL", mode="before")
@@ -49,23 +49,30 @@ class Settings(BaseSettings):
                 return str(BACKEND_DIR / cleaned)
         return str(v)
 
-    # OTP & Email Settings
-
-    DEV_OTP_MODE: bool = True
+    # OTP & Email Settings (loaded from .env)
+    DEV_OTP_MODE: bool = False
     OTP_EXPIRE_MINUTES: int = 10
-    SMTP_ENABLED: bool = True
+    SMTP_ENABLED: bool = False
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_TLS: bool = True
     SMTP_SSL: bool = False
-    SMTP_USER: str = "servizwebsite@gmail.com"
-    SMTP_PASSWORD: str = "yqvpopslmekmcekd"
-    EMAILS_FROM_EMAIL: str = "servizwebsite@gmail.com"
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    EMAILS_FROM_EMAIL: str = "noreply@microservice.io"
     EMAILS_FROM_NAME: str = "MicroService ERP"
-    EMAILS_TO_EMAIL: str = "servizwebsite@gmail.com"
+    EMAILS_TO_EMAIL: str = ""
     RESEND_API_KEY: str = ""
 
-    # CORS
+    # Backblaze B2 / S3 Storage Settings (loaded from .env)
+    B2_ENABLED: bool = True
+    B2_ENDPOINT_URL: str = "https://s3.us-east-005.backblazeb2.com"
+    B2_KEY_ID: str = ""
+    B2_APPLICATION_KEY: str = ""
+    B2_BUCKET_NAME: str = "Microservice"
+    B2_REGION_NAME: str = "us-east-005"
+
+    # CORS Allowed Origins (loaded dynamically from .env, comma-separated or JSON list)
     BACKEND_CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -73,7 +80,6 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3001",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "https://micoserviz.vercel.app",
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")

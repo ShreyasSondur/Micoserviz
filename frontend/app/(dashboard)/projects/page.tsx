@@ -12,21 +12,30 @@ import {
   getUserRole,
   isAdmin,
   isSiteSupervisor,
+  SectionStatusType,
 } from "@/lib/api";
 
-interface ProjectStage {
+export interface ProjectStageDefinition {
   step: number;
   name: string;
+  key:
+    | "commercial_status"
+    | "engineering_status"
+    | "budget_status"
+    | "procurement_status"
+    | "soa_status"
+    | "resource_status"
+    | "site_execution_status";
 }
 
-const STAGE_DEFINITIONS: ProjectStage[] = [
-  { step: 1, name: "Site Survey & Planning" },
-  { step: 2, name: "Conduit & Pre-wire" },
-  { step: 3, name: "Panel Distribution" },
-  { step: 4, name: "Device Installation" },
-  { step: 5, name: "Automation Commissioning" },
-  { step: 6, name: "Client Inspection & Tuning" },
-  { step: 7, name: "Final Handover & Sign-off" },
+export const STAGE_DEFINITIONS: ProjectStageDefinition[] = [
+  { step: 1, name: "Commercial Approval", key: "commercial_status" },
+  { step: 2, name: "Engineering & Documentation", key: "engineering_status" },
+  { step: 3, name: "Budget & Costing", key: "budget_status" },
+  { step: 4, name: "Procurement & Inventory Allocation", key: "procurement_status" },
+  { step: 5, name: "Statement of Accounts (SOA)", key: "soa_status" },
+  { step: 6, name: "Resource Planning", key: "resource_status" },
+  { step: 7, name: "Site Execution", key: "site_execution_status" },
 ];
 
 export interface Project {
@@ -45,7 +54,28 @@ export interface Project {
   budget: string;
   isCompleted?: boolean;
   completedAt?: string;
+  completedStagesCount: number;
+  commercialStatus?: SectionStatusType;
+  engineeringStatus?: SectionStatusType;
+  budgetStatus?: SectionStatusType;
+  procurementStatus?: SectionStatusType;
+  soaStatus?: SectionStatusType;
+  resourceStatus?: SectionStatusType;
+  siteExecutionStatus?: SectionStatusType;
 }
+
+export const getStageStatus = (proj: Project, key: ProjectStageDefinition["key"]): SectionStatusType => {
+  switch (key) {
+    case "commercial_status": return proj.commercialStatus || "not_started";
+    case "engineering_status": return proj.engineeringStatus || "not_started";
+    case "budget_status": return proj.budgetStatus || "not_started";
+    case "procurement_status": return proj.procurementStatus || "not_started";
+    case "soa_status": return proj.soaStatus || "not_started";
+    case "resource_status": return proj.resourceStatus || "not_started";
+    case "site_execution_status": return proj.siteExecutionStatus || "not_started";
+    default: return "not_started";
+  }
+};
 
 const STORAGE_KEY = "microservice_projects_list_v3";
 
@@ -103,23 +133,46 @@ export default function ProjectsPage() {
       setIsLoading(true);
       const data = await apiGetProjects();
       if (Array.isArray(data) && data.length > 0) {
-        const mapped: Project[] = data.map((item: BackendProjectItem) => ({
-          id: item.project_key || `p${item.id}`,
-          name: item.name,
-          client: item.client,
-          location: item.location || "United Arab Emirates",
-          code: item.code,
-          priority: (item.priority || "High") as "High" | "Medium" | "Low",
-          priorityLevel: (item.priority_level || "high") as "high" | "medium" | "low",
-          currentStage: item.current_stage || 1,
-          totalStages: item.total_stages || 7,
-          manager: item.manager || "Farhan Malik",
-          supervisor: item.supervisor || "Site Supervisor",
-          startDate: item.start_date || "15 Jan 2024",
-          budget: item.budget || "",
-          isCompleted: Boolean(item.is_completed),
-          completedAt: item.completed_at,
-        }));
+        const mapped: Project[] = data.map((item: BackendProjectItem) => {
+          const comm = item.commercial_status || "not_started";
+          const eng = item.engineering_status || "not_started";
+          const bud = item.budget_status || "not_started";
+          const proc = item.procurement_status || "not_started";
+          const soa = item.soa_status || "not_started";
+          const res = item.resource_status || "not_started";
+          const site = item.site_execution_status || "not_started";
+
+          const allStatuses = [comm, eng, bud, proc, soa, res, site];
+          const completedCount = allStatuses.filter((s) => s.toLowerCase() === "completed").length;
+          const isProjCompleted = Boolean(item.is_completed) || completedCount >= 7;
+          const calculatedStage = isProjCompleted ? 7 : Math.max(1, completedCount + 1);
+
+          return {
+            id: item.project_key || `p${item.id}`,
+            name: item.name,
+            client: item.client,
+            location: item.location || "United Arab Emirates",
+            code: item.code,
+            priority: (item.priority || "High") as "High" | "Medium" | "Low",
+            priorityLevel: (item.priority_level || "high") as "high" | "medium" | "low",
+            currentStage: item.current_stage || calculatedStage,
+            totalStages: 7,
+            manager: item.manager || "Farhan Malik",
+            supervisor: item.supervisor || "Site Supervisor",
+            startDate: item.start_date || "15 Jan 2024",
+            budget: item.budget || "",
+            isCompleted: isProjCompleted,
+            completedAt: item.completed_at,
+            completedStagesCount: completedCount,
+            commercialStatus: comm,
+            engineeringStatus: eng,
+            budgetStatus: bud,
+            procurementStatus: proc,
+            soaStatus: soa,
+            resourceStatus: res,
+            siteExecutionStatus: site,
+          };
+        });
         setProjects(mapped);
       }
     } catch (err) {
@@ -254,12 +307,13 @@ export default function ProjectsPage() {
         priority: (created.priority || "High") as "High" | "Medium" | "Low",
         priorityLevel: (created.priority_level || "high") as "high" | "medium" | "low",
         currentStage: created.current_stage || 1,
-        totalStages: created.total_stages || 7,
+        totalStages: 7,
         manager: created.manager || "Admin",
         supervisor: created.supervisor || "Site Supervisor",
         startDate: created.start_date || payload.start_date,
         budget: created.budget || "",
         isCompleted: false,
+        completedStagesCount: 0,
       };
 
       setProjects((prev) => [newProj, ...prev]);
@@ -294,6 +348,7 @@ export default function ProjectsPage() {
               ...p,
               isCompleted: true,
               currentStage: 7,
+              completedStagesCount: 7,
               completedAt: completedAtStr,
             };
           }
@@ -694,74 +749,89 @@ export default function ProjectsPage() {
                 </div>
               </div>
 
-              {/* 7-Step Connected Stage Stepper */}
-              <div className="md:col-span-3 flex items-center justify-center">
-                {proj.isCompleted ? (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-xs font-bold">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    <span>100% Handed Over & Signed Off</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center w-full max-w-[220px]">
-                    {STAGE_DEFINITIONS.map((stage, idx) => {
-                      const isCompleted = stage.step < proj.currentStage;
-                      const isCurrent = stage.step === proj.currentStage;
+              {/* 7-Stage Dynamic Connected Stepper */}
+              <div className="md:col-span-3 flex flex-col items-center justify-center gap-1.5 w-full">
+                <div className="flex items-center justify-between w-full max-w-[230px] px-0.5">
+                  <span className="text-[11px] font-bold text-slate-800">
+                    {proj.isCompleted ? "7 of 7 Completed" : `${proj.completedStagesCount} of 7 Completed`}
+                  </span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                    proj.isCompleted
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-indigo-50 text-indigo-700 border border-indigo-100"
+                  }`}>
+                    {proj.isCompleted ? "Completed" : `Stage ${proj.currentStage}/7`}
+                  </span>
+                </div>
 
-                      return (
-                        <React.Fragment key={stage.step}>
-                          {/* Stage Circle Node */}
+                <div className="flex items-center justify-center w-full max-w-[230px]">
+                  {STAGE_DEFINITIONS.map((stage, idx) => {
+                    const status = getStageStatus(proj, stage.key);
+                    const isCompleted = proj.isCompleted || status === "completed";
+                    const isInProgress = !isCompleted && (status === "in_progress" || (!proj.isCompleted && stage.step === proj.currentStage));
+
+                    return (
+                      <React.Fragment key={stage.step}>
+                        {/* Stage Circle Node */}
+                        <div
+                          className="relative group/dot cursor-pointer"
+                          onMouseEnter={() => setHoveredStage({ projectId: proj.id, stage: stage.step })}
+                          onMouseLeave={() => setHoveredStage(null)}
+                        >
                           <div
-                            className="relative group/dot cursor-pointer"
-                            onMouseEnter={() => setHoveredStage({ projectId: proj.id, stage: stage.step })}
-                            onMouseLeave={() => setHoveredStage(null)}
-                          >
-                            <div
-                              className={`w-4 h-4 rounded-full flex items-center justify-center transition-all duration-200 ${
-                                isCompleted
-                                  ? "bg-emerald-500 text-white shadow-2xs"
-                                  : isCurrent
-                                  ? "bg-amber-400 text-white ring-3 ring-amber-100 shadow-2xs animate-pulse"
-                                  : "bg-white border-2 border-slate-300"
-                              }`}
-                            />
+                            className={`w-3.5 h-3.5 rounded-full flex items-center justify-center transition-all duration-200 ${
+                              isCompleted
+                                ? "bg-emerald-500 text-white shadow-2xs"
+                                : isInProgress
+                                ? "bg-amber-400 text-white ring-2 ring-amber-200 shadow-2xs animate-pulse"
+                                : "bg-white border-2 border-slate-300"
+                            }`}
+                          />
 
-                            {/* Hover Tooltip showing stage name */}
-                            {hoveredStage?.projectId === proj.id && hoveredStage?.stage === stage.step && (
-                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1 bg-slate-900 text-white text-[10px] font-medium rounded-lg shadow-lg whitespace-nowrap z-30 pointer-events-none">
-                                Phase {stage.step}: {stage.name}
-                                <span className="block text-[9px] text-slate-400">
-                                  {isCompleted ? "Completed" : isCurrent ? "In Progress" : "Pending"}
+                          {/* Hover Tooltip showing stage name & live dynamic status */}
+                          {hoveredStage?.projectId === proj.id && hoveredStage?.stage === stage.step && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2.5 py-1.5 bg-slate-900 text-white text-[10px] font-medium rounded-xl shadow-xl whitespace-nowrap z-50 pointer-events-none">
+                              <span className="font-bold block text-white">Stage {stage.step}: {stage.name}</span>
+                              <span className="block text-[9px] mt-0.5 font-semibold">
+                                Status:{" "}
+                                <span className={isCompleted ? "text-emerald-400" : isInProgress ? "text-amber-300" : "text-slate-400"}>
+                                  {isCompleted ? "Completed" : isInProgress ? "In Progress" : "Not Started"}
                                 </span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Connecting Line between nodes */}
-                          {idx < STAGE_DEFINITIONS.length - 1 && (
-                            <div
-                              className={`flex-1 h-0.5 mx-1 transition-colors duration-200 ${
-                                stage.step < proj.currentStage ? "bg-emerald-400" : "bg-slate-300"
-                              }`}
-                            />
+                              </span>
+                            </div>
                           )}
-                        </React.Fragment>
-                      );
-                    })}
-                  </div>
-                )}
+                        </div>
+
+                        {/* Connecting Line between nodes */}
+                        {idx < STAGE_DEFINITIONS.length - 1 && (
+                          <div
+                            className={`flex-1 h-0.5 mx-0.5 transition-colors duration-200 ${
+                              isCompleted ? "bg-emerald-400" : "bg-slate-200"
+                            }`}
+                          />
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
               </div>
 
-              {/* Action Column: Complete with Confirmation Popup / Reopen */}
+              {/* Action Column: Archive with Confirmation Popup / Reopen */}
               <div className="md:col-span-2 flex items-center justify-end gap-2 pr-2">
                 {isAdmin() && (
                   !proj.isCompleted ? (
                     <button
                       type="button"
                       onClick={(e) => handleCompleteProject(e, proj)}
-                      title="Mark project as completed and move to archive"
-                      className="px-2.5 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 rounded-lg transition-colors cursor-pointer"
+                      title="Archive Project"
+                      aria-label="Archive Project"
+                      className="p-2 text-slate-500 hover:text-amber-700 bg-slate-50 hover:bg-amber-50 border border-slate-200 hover:border-amber-300 rounded-xl transition-all cursor-pointer shadow-2xs group/arch"
                     >
-                      Complete ✓
+                      <svg className="w-4 h-4 text-slate-600 group-hover/arch:text-amber-700 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect width="20" height="5" x="2" y="3" rx="1" />
+                        <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                        <path d="M10 12h4" />
+                      </svg>
                     </button>
                   ) : (
                     <button

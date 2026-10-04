@@ -1,11 +1,11 @@
 """
-Automated tests for Master Inventory Allocation Engine.
+Automated tests for Master Inventory Allocation Engine, including "Delivered to Site".
 """
 
 import sys
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
-from app.models.project import Project, ProjectCostingItem
+from app.models.project import Project, ProjectCostingItem, ProjectProcurementItem
 from app.models.inventory import InventoryItem, MasterPart
 from app.services.inventory_allocation import recalculate_allocations_for_part, get_part_allocations
 
@@ -24,6 +24,7 @@ def test_allocation_engine():
 
         # Clean any previous test data
         db.query(InventoryItem).filter(InventoryItem.part_number == test_part).delete()
+        db.query(ProjectProcurementItem).filter(ProjectProcurementItem.part_no == test_part).delete()
         db.query(ProjectCostingItem).filter(ProjectCostingItem.part_no == test_part).delete()
         db.commit()
 
@@ -47,14 +48,14 @@ def test_allocation_engine():
         db.commit()
 
         # Case 1: Initial state - 0 stock in Master Inventory
-        # Add a costing item for Active Tower requiring 10 units
-        item_act = ProjectCostingItem(
+        # Add a procurement item for Active Tower requiring 10 units
+        item_act = ProjectProcurementItem(
             project_key="test_p_act",
             sl_no=1,
             part_no=test_part,
-            description="Sensor Unit",
+            product_name="Sensor Unit",
             qty=10.0,
-            procurement_status="Yet To Order",
+            status="Yet To Order",
             allocated_qty=0.0,
         )
         db.add(item_act)
@@ -62,7 +63,7 @@ def test_allocation_engine():
 
         alloc = recalculate_allocations_for_part(test_part, db)
         db.refresh(item_act)
-        assert item_act.procurement_status == "Yet To Order", f"Expected 'Yet To Order', got {item_act.procurement_status}"
+        assert item_act.status == "Yet To Order", f"Expected 'Yet To Order', got {item_act.status}"
         assert item_act.allocated_qty == 0.0
         assert alloc["available_in_warehouse"] == 0.0
         assert len(alloc["active_projects"]) == 1
@@ -83,9 +84,13 @@ def test_allocation_engine():
         db.add(inv1)
         db.commit()
 
+        # User allocates 4 units to Active Tower
+        item_act.allocated_qty = 4.0
+        db.commit()
+
         alloc2 = recalculate_allocations_for_part(test_part, db)
         db.refresh(item_act)
-        assert item_act.procurement_status == "Partially Added", f"Expected 'Partially Added', got {item_act.procurement_status}"
+        assert item_act.status == "Partially Added", f"Expected 'Partially Added', got {item_act.status}"
         assert item_act.allocated_qty == 4.0
         assert alloc2["available_in_warehouse"] == 0.0
         assert alloc2["total_allocated"] == 4.0
@@ -103,11 +108,13 @@ def test_allocation_engine():
             is_active=True,
         )
         db.add(inv2)
+        # User allocates remaining 6 units (total 10.0)
+        item_act.allocated_qty = 10.0
         db.commit()
 
         alloc3 = recalculate_allocations_for_part(test_part, db)
         db.refresh(item_act)
-        assert item_act.procurement_status == "Added", f"Expected 'Added', got {item_act.procurement_status}"
+        assert item_act.status == "Added", f"Expected 'Added', got {item_act.status}"
         assert item_act.allocated_qty == 10.0
         assert alloc3["total_received"] == 14.0
         assert alloc3["total_allocated"] == 10.0
@@ -115,15 +122,15 @@ def test_allocation_engine():
         assert alloc3["active_projects"][0]["remaining_qty"] == 0.0
         print("PASS: Case 3 (Full stock satisfied (10/10) -> 'Added', warehouse has 4.0 available)")
 
-        # Case 4: Add costing item in Completed Hotel requiring 4 units
+        # Case 4: Add procurement item in Completed Hotel requiring 4 units
         # Completed projects consume allocated stock, but are excluded from active drilldown
-        item_comp = ProjectCostingItem(
+        item_comp = ProjectProcurementItem(
             project_key="test_p_comp",
             sl_no=1,
             part_no=test_part,
-            description="Sensor Unit",
+            product_name="Sensor Unit",
             qty=4.0,
-            procurement_status="Added",
+            status="Added",
             allocated_qty=4.0,
         )
         db.add(item_comp)
@@ -136,15 +143,30 @@ def test_allocation_engine():
         assert "test_p_act" in active_keys
         print("PASS: Case 4 (Completed projects excluded from active_projects drilldown)")
 
+        # Case 5: Mark item_act as "Delivered to Site"
+        # Item is fulfilled and consumed, and removed completely from active allocations in Master Inventory
+        item_act.status = "Delivered to Site"
+        db.commit()
+
+        alloc5 = recalculate_allocations_for_part(test_part, db)
+        db.refresh(item_act)
+        assert item_act.status == "Delivered to Site", f"Expected 'Delivered to Site', got {item_act.status}"
+        # Active projects in master inventory must be empty now because item_act is Delivered to Site!
+        active_keys5 = [p["project_key"] for p in alloc5["active_projects"]]
+        assert "test_p_act" not in active_keys5, "Delivered to Site item must be excluded from Master Inventory active projects!"
+        assert len(alloc5["active_projects"]) == 0
+        print("PASS: Case 5 ('Delivered to Site' completely removed item from active allocations in Master Inventory)")
+
         # Clean up test rows
         db.query(InventoryItem).filter(InventoryItem.part_number == test_part).delete()
+        db.query(ProjectProcurementItem).filter(ProjectProcurementItem.part_no == test_part).delete()
         db.query(ProjectCostingItem).filter(ProjectCostingItem.part_no == test_part).delete()
         db.delete(p_act)
         db.delete(p_comp)
         db.delete(part)
         db.commit()
 
-        print("\nAll 4 automated allocation engine tests PASSED perfectly!")
+        print("\nAll 5 automated allocation engine tests PASSED perfectly!")
     finally:
         db.close()
 

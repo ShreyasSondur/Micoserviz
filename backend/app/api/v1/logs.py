@@ -71,3 +71,42 @@ def create_activity_log(
         time=log_entry.time_str,
         created_at=log_entry.created_at,
     )
+
+
+@router.post("/archive-daily")
+def trigger_daily_archiving(
+    date: Optional[str] = Query(None, description="ISO date YYYY-MM-DD to archive, or today if omitted"),
+    db: Session = Depends(get_db),
+):
+    """
+    Archives all activity logs and site execution reports for the specified date
+    to Backblaze B2 under the hierarchical path logs/{YYYY}/{MM-Month}/{DD}/.
+    """
+    from app.services.archiver import archive_all_daily_data
+    result = archive_all_daily_data(target_date=date, db=db)
+    return result
+
+
+@router.get("/backblaze/status")
+def get_backblaze_status():
+    """
+    Returns the real-time Backblaze B2 connection status and active bucket configuration.
+    """
+    from app.services.b2_storage import b2_storage
+    return b2_storage.check_connection()
+
+
+@router.get("/backblaze/files")
+def list_backblaze_files(
+    prefix: str = Query("", description="Key prefix filter e.g. logs/ or projects/"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """
+    Lists objects stored in the Backblaze B2 bucket.
+    """
+    from app.services.b2_storage import b2_storage
+    return {
+        "bucket": b2_storage.bucket_name,
+        "prefix": prefix,
+        "files": b2_storage.list_files(prefix=prefix, max_keys=limit),
+    }

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from fastapi import Form, UploadFile, File, Response
 from fastapi.responses import FileResponse
 from app.config import settings
+from app.services.b2_storage import b2_storage
 
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,9 +30,6 @@ from app.schemas.cashflow import (
 )
 
 router = APIRouter(prefix="/cashflow", tags=["Cash Flow Management"])
-
-CASHFLOW_STORAGE_DIR = Path(settings.STORAGE_ROOT) / "Cashflow"
-CASHFLOW_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 def format_file_size(size_in_bytes: int) -> str:
     if size_in_bytes < 1024:
@@ -200,16 +198,18 @@ async def create_petty_cash(
     if file and file.filename:
         clean_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file.filename)
         saved_filename = f"petty_{new_tx.id}_{clean_name}"
-        saved_path = CASHFLOW_STORAGE_DIR / saved_filename
+        b2_key = f"cashflow/{saved_filename}"
 
         contents = await file.read()
-        with open(saved_path, "wb") as f_out:
-            f_out.write(contents)
+        content_type = (file.content_type or "application/octet-stream")[:100]
+
+        # Upload directly to Backblaze B2
+        b2_storage.upload_bytes(b2_key, contents, content_type=content_type)
 
         new_tx.file_name = file.filename
-        new_tx.file_path = str(saved_path)
+        new_tx.file_path = b2_key
         new_tx.file_size = format_file_size(len(contents))
-        new_tx.file_type = (file.content_type or "application/octet-stream")[:100]
+        new_tx.file_type = content_type
 
         db.commit()
         db.refresh(new_tx)
@@ -314,16 +314,18 @@ async def create_credit_loan(
     if file and file.filename:
         clean_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file.filename)
         saved_filename = f"loan_{new_item.id}_{clean_name}"
-        saved_path = CASHFLOW_STORAGE_DIR / saved_filename
+        b2_key = f"cashflow/{saved_filename}"
 
         contents = await file.read()
-        with open(saved_path, "wb") as f_out:
-            f_out.write(contents)
+        content_type = (file.content_type or "application/octet-stream")[:100]
+
+        # Upload directly to Backblaze B2
+        b2_storage.upload_bytes(b2_key, contents, content_type=content_type)
 
         new_item.file_name = file.filename
-        new_item.file_path = str(saved_path)
+        new_item.file_path = b2_key
         new_item.file_size = format_file_size(len(contents))
-        new_item.file_type = (file.content_type or "application/octet-stream")[:100]
+        new_item.file_type = content_type
 
         db.commit()
         db.refresh(new_item)
@@ -460,14 +462,28 @@ def download_petty_document(
         PettyCashTransaction.id == transaction_id, 
         PettyCashTransaction.is_active == True
     ).first()
-    if not tx or not tx.file_path or not os.path.exists(tx.file_path):
+    if not tx or not tx.file_path:
         raise HTTPException(status_code=404, detail="Document not found")
-        
-    return FileResponse(
-        path=tx.file_path,
-        filename=tx.file_name or "document",
-        media_type=tx.file_type or "application/octet-stream"
-    )
+
+    # 1. Check Backblaze B2
+    b2_bytes = b2_storage.download_bytes(tx.file_path)
+    if b2_bytes:
+        return Response(
+            content=b2_bytes,
+            media_type=tx.file_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{tx.file_name or "document"}"'}
+        )
+
+    # 2. Check local path fallback
+    if os.path.exists(tx.file_path):
+        return FileResponse(
+            path=tx.file_path,
+            filename=tx.file_name or "document",
+            media_type=tx.file_type or "application/octet-stream"
+        )
+
+    raise HTTPException(status_code=404, detail="Document file not found in storage")
+
 
 @router.get("/loans/{loan_id}/download")
 def download_loan_document(
@@ -479,11 +495,24 @@ def download_loan_document(
         CreditLoanItem.id == loan_id, 
         CreditLoanItem.is_active == True
     ).first()
-    if not item or not item.file_path or not os.path.exists(item.file_path):
+    if not item or not item.file_path:
         raise HTTPException(status_code=404, detail="Document not found")
-        
-    return FileResponse(
-        path=item.file_path,
-        filename=item.file_name or "document",
-        media_type=item.file_type or "application/octet-stream"
-    )
+
+    # 1. Check Backblaze B2
+    b2_bytes = b2_storage.download_bytes(item.file_path)
+    if b2_bytes:
+        return Response(
+            content=b2_bytes,
+            media_type=item.file_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{item.file_name or "document"}"'}
+        )
+
+    # 2. Check local path fallback
+    if os.path.exists(item.file_path):
+        return FileResponse(
+            path=item.file_path,
+            filename=item.file_name or "document",
+            media_type=item.file_type or "application/octet-stream"
+        )
+
+    raise HTTPException(status_code=404, detail="Document file not found in storage")

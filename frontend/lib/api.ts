@@ -326,6 +326,13 @@ function getAuthHeaders(): HeadersInit {
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
+  const user = getStoredUser();
+  if (user) {
+    if (user.role) headers["X-User-Role"] = user.role;
+    if (user.username || user.name || user.email) {
+      headers["X-User-Name"] = user.username || user.name || user.email;
+    }
+  }
   return headers;
 }
 
@@ -335,7 +342,7 @@ function getAuthHeaders(): HeadersInit {
 async function fetchBackendJson<T>(url: string, options: RequestInit = {}): Promise<T> {
   let res: Response;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
     res = await fetch(url, {
@@ -1347,7 +1354,7 @@ export interface BackendCostingItem {
   vendor?: string;
   brand?: string;
   invoice_number?: string;
-  procurement_status: "Added" | "Partially Added" | "Not Added" | "Yet To Order" | "Yet To Deliver" | string;
+  procurement_status: "Added" | "Partially Added" | "Not Added" | "Yet To Order" | "Yet To Deliver" | "Delivered to Site" | string;
   allocated_qty?: number;
   remaining_qty?: number;
 }
@@ -1415,6 +1422,84 @@ export async function apiDeleteProjectCosting(
 }
 
 // ==========================================
+// PROJECT COSTING CHANGE PROPOSALS (Temporary Review Queue)
+// ==========================================
+
+export interface BackendCostingProposal {
+  id: number;
+  project_key: string;
+  change_type: "ADD" | "EDIT" | "DELETE";
+  costing_item_id?: number | null;
+  proposed_by_name: string;
+  proposed_by_role: string;
+  original_data: Record<string, any>;
+  proposed_data: Record<string, any>;
+  status: "pending" | "approved" | "rejected";
+  notes?: string;
+  created_at?: string;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+}
+
+export async function apiGetCostingProposals(projectKey: string): Promise<BackendCostingProposal[]> {
+  return await fetchBackendJson<BackendCostingProposal[]>(
+    `${API_BASE_URL}/projects/${projectKey}/costing/proposals`,
+    {
+      method: "GET",
+      headers: getAuthHeaders(),
+      cache: "no-store",
+    }
+  );
+}
+
+export async function apiCreateCostingProposal(
+  projectKey: string,
+  payload: {
+    change_type: "ADD" | "EDIT" | "DELETE";
+    costing_item_id?: number | null;
+    proposed_by_name?: string;
+    proposed_by_role?: string;
+    proposed_data: Record<string, any>;
+    notes?: string;
+  }
+): Promise<BackendCostingProposal> {
+  return await fetchBackendJson<BackendCostingProposal>(
+    `${API_BASE_URL}/projects/${projectKey}/costing/proposals`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function apiApproveCostingProposal(
+  projectKey: string,
+  proposalId: number
+): Promise<{ message: string; proposal_id: number }> {
+  return await fetchBackendJson<{ message: string; proposal_id: number }>(
+    `${API_BASE_URL}/projects/${projectKey}/costing/proposals/${proposalId}/approve`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    }
+  );
+}
+
+export async function apiRejectCostingProposal(
+  projectKey: string,
+  proposalId: number
+): Promise<{ message: string; proposal_id: number }> {
+  return await fetchBackendJson<{ message: string; proposal_id: number }>(
+    `${API_BASE_URL}/projects/${projectKey}/costing/proposals/${proposalId}/reject`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    }
+  );
+}
+
+// ==========================================
 // PROJECT PROCUREMENT API & TYPES
 // ==========================================
 
@@ -1428,7 +1513,7 @@ export interface BackendProcurementItem {
   brand?: string;
   qty: number;
   allocated_qty: number;
-  status: "Added" | "Partially Added" | "Yet To Order" | "Yet To Deliver" | string;
+  status: "Added" | "Partially Added" | "Yet To Order" | "Yet To Deliver" | "Delivered to Site" | string;
   invoice_number?: string;
   notes?: string;
   remaining_qty?: number;

@@ -393,7 +393,7 @@ export interface ProjectDossierParams {
     soa: string;
     resource: string;
     site_execution: string;
-    handover: string;
+    handover?: string;
   };
   activityLogs: Array<{
     user: string;
@@ -608,12 +608,12 @@ export const exportProjectDossierToPdf = async (params: ProjectDossierParams) =>
 
   const sectionsList = [
     { name: "1. Commercial Approval", status: sectionStatuses.commercial || "not_started" },
-    { name: "2. Engineering Docs", status: sectionStatuses.engineering || "not_started" },
+    { name: "2. Engineering & Documentation", status: sectionStatuses.engineering || "not_started" },
     { name: "3. Budget & Costing", status: sectionStatuses.budget || "not_started" },
-    { name: "4. Procurement", status: sectionStatuses.procurement || "not_started" },
-    { name: "5. Statement of Accounts", status: sectionStatuses.soa || "not_started" },
-    { name: "6. Site Execution", status: sectionStatuses.site_execution || "not_started" },
-    { name: "7. Handover", status: sectionStatuses.handover || "not_started" },
+    { name: "4. Procurement & Inventory Allocation", status: sectionStatuses.procurement || "not_started" },
+    { name: "5. Statement of Accounts (SOA)", status: sectionStatuses.soa || "not_started" },
+    { name: "6. Resource Planning", status: sectionStatuses.resource || "not_started" },
+    { name: "7. Site Execution", status: sectionStatuses.site_execution || "not_started" },
   ];
 
   const colWidth = (contentWidth - 6) / 2;
@@ -1133,10 +1133,10 @@ export const exportProjectDossierToPdf = async (params: ProjectDossierParams) =>
   }
 
   // -------------------------------------------------------------------------
-  // SECTION 7: PROJECT HANDOVER & VERIFICATION SIGN-OFF
+  // PROJECT VERIFICATION & SIGN-OFF
   // -------------------------------------------------------------------------
   checkPageBreak(40);
-  drawSectionHeading("7. PROJECT VERIFICATION & HANDOVER SIGN-OFF");
+  drawSectionHeading("PROJECT VERIFICATION & SIGN-OFF");
 
   const signColWidth = (contentWidth - 8) / 3;
   const signHeight = 22;

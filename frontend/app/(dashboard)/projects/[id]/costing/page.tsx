@@ -7,14 +7,20 @@ import { AdminPasswordModal } from "@/components";
 import {
   API_BASE_URL,
   BackendCostingItem,
+  BackendCostingProposal,
   apiGetProjectCosting,
   apiCreateProjectCosting,
   apiUpdateProjectCosting,
   apiDeleteProjectCosting,
+  apiGetCostingProposals,
+  apiCreateCostingProposal,
+  apiApproveCostingProposal,
+  apiRejectCostingProposal,
   apiGetParts,
   apiGetInventory,
   BackendPartItem,
   BackendInventoryItem,
+  getStoredUser,
   getUserRole,
   isAdmin,
   isSiteSupervisor,
@@ -53,6 +59,11 @@ export default function ProjectCostingPage() {
   // Costing items state
   const [costingItems, setCostingItems] = useState<BackendCostingItem[]>([]);
   const [isLoadingCosting, setIsLoadingCosting] = useState(true);
+
+  // Temporary proposals queue state (Non-admin proposals awaiting Admin review)
+  const [costingProposals, setCostingProposals] = useState<BackendCostingProposal[]>([]);
+  const [selectedProposalForDiff, setSelectedProposalForDiff] = useState<BackendCostingProposal | null>(null);
+  const [isProcessingProposalAction, setIsProcessingProposalAction] = useState(false);
 
   // Admin Security Verification Modal State
   const [adminAuthModal, setAdminAuthModal] = useState<{
@@ -146,13 +157,19 @@ export default function ProjectCostingPage() {
     fetchProject();
   }, [rawId]);
 
-  // Load Costing Line Items from FastAPI backend
+  // Load Costing Line Items and Pending Change Proposals from FastAPI backend
   const loadCostingData = async () => {
     setIsLoadingCosting(true);
     try {
-      const data = await apiGetProjectCosting(rawId);
+      const [data, proposals] = await Promise.all([
+        apiGetProjectCosting(rawId),
+        apiGetCostingProposals(rawId).catch(() => []),
+      ]);
       if (Array.isArray(data)) {
         setCostingItems(data);
+      }
+      if (Array.isArray(proposals)) {
+        setCostingProposals(proposals);
       }
     } catch (err) {
       console.warn("Could not load costing data from backend", err);
@@ -288,7 +305,20 @@ export default function ProjectCostingPage() {
     const totalPurchase = costingItems.reduce((acc, item) => acc + (item.purchase_total || 0), 0);
     const totalSelling = costingItems.reduce((acc, item) => acc + (item.selling_total || 0), 0);
     const totalProfit = totalSelling - totalPurchase;
-    const profitMarginPct = totalSelling > 0 ? (totalProfit / totalSelling) * 100 : 0;
+    
+    // Average margin based on purchase cost (markup on cost)
+    // If there are N products with 25% margin, the average margin is exactly 25.0%
+    let profitMarginPct = 0;
+    if (totalPurchase > 0) {
+      profitMarginPct = (totalProfit / totalPurchase) * 100;
+    } else if (costingItems.length > 0) {
+      const sumMargins = costingItems.reduce((acc, item) => {
+        const raw = Number(item.margin) || 0;
+        const pct = raw > 0 && raw < 1 ? (item.selling_margin_percent || (1 - raw) * 100) : raw;
+        return acc + pct;
+      }, 0);
+      profitMarginPct = sumMargins / costingItems.length;
+    }
 
     return {
       totalPurchase,
@@ -366,39 +396,47 @@ export default function ProjectCostingPage() {
     setIsCostingModalOpen(true);
   };
 
-  // Open Edit Costing Item Modal (Requires Admin Password)
+  // Open Edit Costing Item Modal
   const handleOpenEditCosting = (item: BackendCostingItem) => {
-    setAdminAuthModal({
-      isOpen: true,
-      title: "Authorize Costing Edit",
-      description: `Enter Admin password to edit line item "${item.description || item.part_no}".`,
-      actionLabel: "Edit Item",
-      actionType: "warning",
-      onSuccess: () => {
-        setEditingCostingId(item.id);
-        const rawMargin = Number(item.margin) || 0;
-        // Backward-compatibility: if legacy factor was < 1 (e.g. 0.25 -> 25), convert to percentage
-        const marginPct =
-          rawMargin > 0 && rawMargin < 1
-            ? (item.selling_margin_percent || Math.round((1 - rawMargin) * 100))
-            : rawMargin;
-        setCostingForm({
-          part_no: item.part_no,
-          description: item.description,
-          qty: item.qty,
-          purchase_unit_price: item.purchase_unit_price,
-          margin: marginPct > 0 ? marginPct : "",
-          selling_unit_price: item.selling_unit_price,
-          vendor: item.vendor || "",
-          brand: item.brand || "",
-          invoice_number: item.invoice_number || "",
-        });
-        setIsCostingModalOpen(true);
-      },
-    });
+    const rawMargin = Number(item.margin) || 0;
+    // Backward-compatibility: if legacy factor was < 1 (e.g. 0.25 -> 25), convert to percentage
+    const marginPct =
+      rawMargin > 0 && rawMargin < 1
+        ? (item.selling_margin_percent || Math.round((1 - rawMargin) * 100))
+        : rawMargin;
+
+    const populateAndOpen = () => {
+      setEditingCostingId(item.id);
+      setCostingForm({
+        part_no: item.part_no,
+        description: item.description,
+        qty: item.qty,
+        purchase_unit_price: item.purchase_unit_price,
+        margin: marginPct > 0 ? marginPct : "",
+        selling_unit_price: item.selling_unit_price,
+        vendor: item.vendor || "",
+        brand: item.brand || "",
+        invoice_number: item.invoice_number || "",
+      });
+      setIsCostingModalOpen(true);
+    };
+
+    if (isAdmin()) {
+      setAdminAuthModal({
+        isOpen: true,
+        title: "Authorize Costing Edit",
+        description: `Enter Admin password to edit line item "${item.description || item.part_no}".`,
+        actionLabel: "Edit Item",
+        actionType: "warning",
+        onSuccess: populateAndOpen,
+      });
+    } else {
+      // Non-admin can suggest edits directly without needing Admin password
+      populateAndOpen();
+    }
   };
 
-  // Save / Update Costing Item (Decoupled from Inventory Allocation)
+  // Save / Update Costing Item (Admin directly applies, Non-admin routes to proposals queue)
   const handleSaveCostingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const qty = Number(costingForm.qty) || 1;
@@ -408,46 +446,68 @@ export default function ProjectCostingPage() {
     const sellingUnit = Number((purchaseUnit * (1 + marginFactor / 100)).toFixed(2));
     const sellingTotal = Number((qty * sellingUnit).toFixed(2));
 
+    const itemPayload = {
+      part_no: costingForm.part_no,
+      description: costingForm.description,
+      qty,
+      purchase_unit_price: purchaseUnit,
+      purchase_total: purchaseTotal,
+      margin: marginFactor,
+      selling_margin_percent: marginFactor,
+      selling_unit_price: sellingUnit,
+      selling_total: sellingTotal,
+      vendor: costingForm.vendor,
+      brand: costingForm.brand,
+      invoice_number: "",
+    };
+
     try {
-      if (editingCostingId) {
-        const updated = await apiUpdateProjectCosting(rawId, editingCostingId, {
-          part_no: costingForm.part_no,
-          description: costingForm.description,
-          qty,
-          purchase_unit_price: purchaseUnit,
-          purchase_total: purchaseTotal,
-          margin: marginFactor,
-          selling_margin_percent: marginFactor,
-          selling_unit_price: sellingUnit,
-          selling_total: sellingTotal,
-          vendor: costingForm.vendor,
-          brand: costingForm.brand,
-          invoice_number: "",
-        });
-        setCostingItems((prev) => prev.map((item) => (item.id === editingCostingId ? updated : item)));
-        showToast("Costing item updated successfully!");
+      if (isAdmin()) {
+        // Direct Admin Execution
+        if (editingCostingId) {
+          const updated = await apiUpdateProjectCosting(rawId, editingCostingId, itemPayload);
+          setCostingItems((prev) => prev.map((item) => (item.id === editingCostingId ? updated : item)));
+          showToast("Costing item updated directly by Admin!");
+        } else {
+          const created = await apiCreateProjectCosting(rawId, {
+            ...itemPayload,
+            sl_no: costingItems.length + 1,
+            procurement_status: "Yet To Order",
+            allocated_qty: 0,
+            remaining_qty: qty,
+          });
+          setCostingItems((prev) => [...prev, created]);
+          showToast("New costing item added directly by Admin!");
+        }
       } else {
-        const created = await apiCreateProjectCosting(rawId, {
-          sl_no: costingItems.length + 1,
-          part_no: costingForm.part_no,
-          description: costingForm.description,
-          qty,
-          purchase_unit_price: purchaseUnit,
-          purchase_total: purchaseTotal,
-          margin: marginFactor,
-          selling_margin_percent: marginFactor,
-          selling_unit_price: sellingUnit,
-          selling_total: sellingTotal,
-          vendor: costingForm.vendor,
-          brand: costingForm.brand,
-          invoice_number: "",
-          procurement_status: "Yet To Order",
-          allocated_qty: 0,
-          remaining_qty: qty,
-        });
-        setCostingItems((prev) => [...prev, created]);
-        showToast("New costing item added successfully!");
+        // Non-admin routes to temporary proposals database
+        const user = getStoredUser();
+        const uName = user?.username || user?.name || user?.email || "Team Member";
+        const uRole = userRole || user?.role || "Project Manager";
+
+        if (editingCostingId) {
+          await apiCreateCostingProposal(rawId, {
+            change_type: "EDIT",
+            costing_item_id: editingCostingId,
+            proposed_by_name: uName,
+            proposed_by_role: uRole,
+            proposed_data: itemPayload,
+            notes: `Suggested edit for item #${editingCostingId}: ${costingForm.description || costingForm.part_no}`,
+          });
+          showToast("Changes submitted to temporary queue! Awaiting Admin approval.");
+        } else {
+          await apiCreateCostingProposal(rawId, {
+            change_type: "ADD",
+            proposed_by_name: uName,
+            proposed_by_role: uRole,
+            proposed_data: itemPayload,
+            notes: `Proposed new item: ${costingForm.description || costingForm.part_no}`,
+          });
+          showToast("New item proposed! Stored in temporary queue awaiting Admin approval.");
+        }
+        await loadCostingData();
       }
+
       setIsCostingModalOpen(false);
       window.dispatchEvent(new CustomEvent("inventory_store_update"));
     } catch (err: any) {
@@ -456,26 +516,90 @@ export default function ProjectCostingPage() {
     }
   };
 
-  // Delete Costing Item (Requires Admin Password)
+  // Delete Costing Item (Admin deletes directly, Non-admin proposes deletion)
   const handleDeleteCostingItem = (id: number, desc: string) => {
-    setAdminAuthModal({
-      isOpen: true,
-      title: "Authorize Item Deletion",
-      description: `Enter Admin password to permanently delete item "${desc || id}".`,
-      actionLabel: "Delete Item",
-      actionType: "danger",
-      onSuccess: async () => {
-        try {
-          await apiDeleteProjectCosting(rawId, id);
-          setCostingItems((prev) => prev.filter((item) => item.id !== id));
-          showToast("Costing item deleted successfully!");
-          window.dispatchEvent(new CustomEvent("inventory_store_update"));
-        } catch (err: any) {
-          console.error("Failed to delete costing item", err);
-          showToast(err?.message || "Failed to delete costing item");
-        }
-      },
-    });
+    if (isAdmin()) {
+      setAdminAuthModal({
+        isOpen: true,
+        title: "Authorize Item Deletion",
+        description: `Enter Admin password to permanently delete item "${desc || id}".`,
+        actionLabel: "Delete Item",
+        actionType: "danger",
+        onSuccess: async () => {
+          try {
+            await apiDeleteProjectCosting(rawId, id);
+            setCostingItems((prev) => prev.filter((item) => item.id !== id));
+            showToast("Costing item deleted successfully!");
+            window.dispatchEvent(new CustomEvent("inventory_store_update"));
+          } catch (err: any) {
+            console.error("Failed to delete costing item", err);
+            showToast(err?.message || "Failed to delete costing item");
+          }
+        },
+      });
+    } else {
+      // Non-admin deletion proposal
+      const user = getStoredUser();
+      const uName = user?.username || user?.name || user?.email || "Team Member";
+      const uRole = userRole || user?.role || "Project Manager";
+
+      setAdminAuthModal({
+        isOpen: true,
+        title: "Propose Item Deletion",
+        description: `Suggest deletion of "${desc || id}"? This request will be placed in the temporary queue for Admin review.`,
+        actionLabel: "Submit Deletion Request",
+        actionType: "warning",
+        onSuccess: async () => {
+          try {
+            await apiCreateCostingProposal(rawId, {
+              change_type: "DELETE",
+              costing_item_id: id,
+              proposed_by_name: uName,
+              proposed_by_role: uRole,
+              proposed_data: {},
+              notes: `Deletion request for item #${id}: ${desc}`,
+            });
+            await loadCostingData();
+            showToast("Deletion proposal submitted! Awaiting Admin approval.");
+          } catch (err: any) {
+            showToast(err?.message || "Failed to submit deletion proposal");
+          }
+        },
+      });
+    }
+  };
+
+  // Admin approves proposal (applies to live sheet and deletes temporary proposal)
+  const handleApproveProposal = async (proposal: BackendCostingProposal) => {
+    setIsProcessingProposalAction(true);
+    try {
+      await apiApproveCostingProposal(rawId, proposal.id);
+      showToast(`Proposal #${proposal.id} approved! Changes successfully applied to live BOM.`);
+      setSelectedProposalForDiff(null);
+      await loadCostingData();
+      window.dispatchEvent(new CustomEvent("inventory_store_update"));
+    } catch (err: any) {
+      console.error("Failed to approve proposal", err);
+      showToast(err?.message || "Failed to approve proposal");
+    } finally {
+      setIsProcessingProposalAction(false);
+    }
+  };
+
+  // Admin rejects proposal (removes from temporary database)
+  const handleRejectProposal = async (proposal: BackendCostingProposal) => {
+    setIsProcessingProposalAction(true);
+    try {
+      await apiRejectCostingProposal(rawId, proposal.id);
+      showToast(`Proposal #${proposal.id} rejected and discarded from temporary database.`);
+      setSelectedProposalForDiff(null);
+      await loadCostingData();
+    } catch (err: any) {
+      console.error("Failed to reject proposal", err);
+      showToast(err?.message || "Failed to reject proposal");
+    } finally {
+      setIsProcessingProposalAction(false);
+    }
   };
 
   return (
@@ -535,7 +659,7 @@ export default function ProjectCostingPage() {
               <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            <span>Add Costing Item</span>
+            <span>{isAdmin() ? "Add Costing Item" : "Suggest Costing Item"}</span>
           </button>
         </div>
       </div>
@@ -618,7 +742,7 @@ export default function ProjectCostingPage() {
         <div className="relative overflow-hidden p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-white via-violet-50/40 to-purple-100/60 border border-purple-100/90 shadow-2xs hover:shadow-md transition-all duration-200 group">
           <div className="flex items-center justify-between">
             <span className="text-xs font-extrabold text-purple-700 uppercase tracking-wider">
-              Profit Margin
+              Average Margin
             </span>
             <span className="p-2 rounded-xl bg-purple-100 text-purple-700 group-hover:scale-110 transition-transform">
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -634,9 +758,154 @@ export default function ProjectCostingPage() {
               {costingSummary.profitMarginPct.toFixed(1)}%
             </span>
           </div>
-          <p className="text-[11px] text-purple-600/80 mt-1 font-medium">Overall calculated margin</p>
+          <p className="text-[11px] text-purple-600/80 mt-1 font-medium">Average margin across all BOM items</p>
         </div>
       </div>
+
+      {/* PENDING APPROVAL REQUESTS (Temporary DB Review Section) */}
+      {costingProposals.length > 0 && (
+        <div className="rounded-2xl border-2 border-amber-300/80 bg-gradient-to-br from-amber-50/70 via-white to-amber-100/30 p-5 shadow-sm space-y-4 animate-in fade-in duration-200">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-200/80 pb-3">
+            <div className="flex items-center gap-3">
+              <span className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-sm shadow-xs animate-pulse">
+                ⏳
+              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                    Pending Costing Change Proposals
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-black bg-amber-200 text-amber-900 border border-amber-300">
+                    {costingProposals.length} awaiting review
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {isAdmin()
+                    ? "Team members have proposed changes. Compare cell-by-cell values below to approve or discard them."
+                    : "Your submitted change proposals are safely recorded in the review queue awaiting Administrator approval."}
+                </p>
+              </div>
+            </div>
+            {isAdmin() && (
+              <span className="text-[11px] font-semibold text-amber-800 bg-amber-100 px-3 py-1 rounded-lg border border-amber-200 self-start sm:self-auto">
+                Admin Review Authority Active
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {costingProposals.map((prop) => {
+              const isEdit = prop.change_type === "EDIT";
+              const isAdd = prop.change_type === "ADD";
+              const targetName =
+                prop.proposed_data?.description ||
+                prop.proposed_data?.part_no ||
+                prop.original_data?.description ||
+                prop.original_data?.part_no ||
+                `Item #${prop.costing_item_id || prop.id}`;
+
+              return (
+                <div
+                  key={prop.id}
+                  className="rounded-xl border border-amber-200/90 bg-white p-4 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between gap-3 group"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider ${
+                          isAdd
+                            ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                            : isEdit
+                            ? "bg-amber-100 text-amber-900 border border-amber-300"
+                            : "bg-rose-100 text-rose-800 border border-rose-300"
+                        }`}
+                      >
+                        {isAdd ? "+ New Item Proposal" : isEdit ? "✎ Edit Modification" : "✕ Deletion Request"}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        #{prop.id}
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 line-clamp-1 group-hover:text-indigo-600 transition-colors">
+                        {targetName}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Proposed by <strong className="text-slate-700">{prop.proposed_by_name}</strong>{" "}
+                        <span className="text-[10px] text-slate-400 font-medium">({prop.proposed_by_role})</span>
+                      </p>
+                    </div>
+
+                    {isEdit && (
+                      <div className="text-[11px] bg-slate-50 rounded-lg p-2 border border-slate-200/80 font-mono text-slate-600 space-y-0.5">
+                        {prop.original_data?.qty !== prop.proposed_data?.qty && (
+                          <div>Qty: <span className="line-through text-slate-400">{prop.original_data?.qty}</span> → <strong className="text-emerald-700 font-bold">{prop.proposed_data?.qty}</strong></div>
+                        )}
+                        {prop.original_data?.purchase_unit_price !== prop.proposed_data?.purchase_unit_price && (
+                          <div>Cost: <span className="line-through text-slate-400">{prop.original_data?.purchase_unit_price}</span> → <strong className="text-emerald-700 font-bold">{prop.proposed_data?.purchase_unit_price} AED</strong></div>
+                        )}
+                        {prop.original_data?.margin !== prop.proposed_data?.margin && (
+                          <div>Margin: <span className="line-through text-slate-400">{prop.original_data?.margin}%</span> → <strong className="text-emerald-700 font-bold">{prop.proposed_data?.margin}%</strong></div>
+                        )}
+                      </div>
+                    )}
+
+                    {isAdd && (
+                      <div className="text-[11px] bg-emerald-50/50 rounded-lg p-2 border border-emerald-100 font-mono text-emerald-900 space-y-0.5">
+                        <div>Qty: <strong>{prop.proposed_data?.qty}</strong> • Cost: <strong>{prop.proposed_data?.purchase_unit_price} AED</strong></div>
+                        <div>Margin: <strong>{prop.proposed_data?.margin}%</strong> • Selling: <strong>{prop.proposed_data?.selling_unit_price} AED</strong></div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProposalForDiff(prop)}
+                      className="px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="16" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12.01" y2="8" />
+                      </svg>
+                      <span>Cell Diff</span>
+                    </button>
+
+                    {isAdmin() ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleRejectProposal(prop)}
+                          disabled={isProcessingProposalAction}
+                          title="Reject and discard from temporary database"
+                          className="px-2 py-1 text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          Reject ✕
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApproveProposal(prop)}
+                          disabled={isProcessingProposalAction}
+                          title="Approve and apply changes to live costing sheet"
+                          className="px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          Approve ✓
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] font-medium text-amber-700 italic">
+                        Under Review
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Excel-Style Costing Spreadsheet Table */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
@@ -728,7 +997,17 @@ export default function ProjectCostingPage() {
                         {item.sl_no || idx + 1}
                       </td>
                       <td className="py-3 px-3 font-mono font-bold text-slate-900 border-r border-slate-200">
-                        {item.part_no}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{item.part_no}</span>
+                          {costingProposals.some((p) => p.costing_item_id === item.id) && (
+                            <span
+                              title="This item has pending proposed changes awaiting Admin review"
+                              className="px-1.5 py-0.2 rounded-full text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-300 animate-pulse whitespace-nowrap"
+                            >
+                              Proposal
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4 font-medium text-slate-800 border-r border-slate-200">
                         <div>{item.description}</div>
@@ -764,34 +1043,30 @@ export default function ProjectCostingPage() {
                         +{profit.toFixed(2)}
                       </td>
                       <td className="py-3 px-2 text-center">
-                        {isAdmin() ? (
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditCosting(item)}
-                              title="Edit item"
-                              className="p-1 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
-                            >
-                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                              </svg>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteCostingItem(item.id, item.description || item.part_no)}
-                              title="Delete item"
-                              className="p-1 rounded-md text-rose-500 hover:bg-rose-50 transition-colors cursor-pointer"
-                            >
-                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                              </svg>
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-slate-300 text-xs">—</span>
-                        )}
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditCosting(item)}
+                            title={isAdmin() ? "Edit item directly (Admin)" : "Suggest changes for Admin review"}
+                            className="p-1 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCostingItem(item.id, item.description || item.part_no)}
+                            title={isAdmin() ? "Delete item directly (Admin)" : "Suggest deletion for Admin review"}
+                            className="p-1 rounded-md text-rose-500 hover:bg-rose-50 transition-colors cursor-pointer"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -834,9 +1109,22 @@ export default function ProjectCostingPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden animate-in zoom-in-95 duration-150">
             <div className="px-6 py-4 bg-gradient-to-r from-[#0c1033] to-[#1a2063] text-white flex items-center justify-between">
-              <h3 className="font-extrabold text-base sm:text-lg">
-                {editingCostingId ? "Edit Costing Item" : "Add Costing Item"}
-              </h3>
+              <div>
+                <h3 className="font-extrabold text-base sm:text-lg">
+                  {isAdmin()
+                    ? editingCostingId
+                      ? "Edit Costing Item"
+                      : "Add Costing Item"
+                    : editingCostingId
+                    ? "Suggest Costing Edit"
+                    : "Propose New Costing Item"}
+                </h3>
+                {!isAdmin() && (
+                  <p className="text-[11px] text-amber-300 mt-0.5 font-medium">
+                    Proposal Mode: Awaiting Admin approval before updating live BOM
+                  </p>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => setIsCostingModalOpen(false)}
@@ -847,6 +1135,18 @@ export default function ProjectCostingPage() {
             </div>
 
             <form onSubmit={handleSaveCostingSubmit} className="p-6 space-y-4">
+              {!isAdmin() && (
+                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                  <span className="text-amber-600 font-bold text-base leading-none">ℹ</span>
+                  <div>
+                    <p className="font-bold">Temporary Review Queue Notice</p>
+                    <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                      As a non-admin team member, your {editingCostingId ? "edits" : "new item"} will be safely recorded in the temporary database. The Admin will compare previous and proposed values cell-by-cell before approving.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="relative" ref={partDropdownRef}>
                   <div className="flex items-center justify-between mb-1">
@@ -1109,10 +1409,242 @@ export default function ProjectCostingPage() {
                   type="submit"
                   className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer"
                 >
-                  {editingCostingId ? "Update Item" : "Save Item"}
+                  {isAdmin()
+                    ? editingCostingId
+                      ? "Update Item (Direct)"
+                      : "Save Item (Direct)"
+                    : editingCostingId
+                    ? "Submit Changes for Approval"
+                    : "Submit Proposal for Approval"}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CELL-TO-CELL COMPARISON & APPROVAL DIFF (ADMIN REVIEW) */}
+      {selectedProposalForDiff && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-3xl overflow-hidden animate-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-[#0c1033] via-[#121748] to-[#1a2063] text-white flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-extrabold text-base sm:text-lg">
+                    Cell-by-Cell Diff Comparison
+                  </h3>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                      selectedProposalForDiff.change_type === "ADD"
+                        ? "bg-emerald-500 text-white"
+                        : selectedProposalForDiff.change_type === "EDIT"
+                        ? "bg-amber-500 text-white"
+                        : "bg-rose-500 text-white"
+                    }`}
+                  >
+                    {selectedProposalForDiff.change_type} REQUEST
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Submitted by <strong className="text-white">{selectedProposalForDiff.proposed_by_name}</strong> ({selectedProposalForDiff.proposed_by_role})
+                  {selectedProposalForDiff.created_at && ` • ${new Date(selectedProposalForDiff.created_at).toLocaleString()}`}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedProposalForDiff(null)}
+                className="text-slate-300 hover:text-white transition-colors cursor-pointer text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Comparison Body */}
+            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+              {selectedProposalForDiff.change_type === "EDIT" ? (
+                <>
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span>Target Item ID: <strong className="font-mono text-slate-800">#{selectedProposalForDiff.costing_item_id}</strong></span>
+                    <span className="flex items-center gap-3">
+                      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-amber-100 border border-amber-300"></span> Previous Value</span>
+                      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-300"></span> Proposed Value</span>
+                    </span>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                          <th className="py-2.5 px-4 w-1/4">Cell / Attribute</th>
+                          <th className="py-2.5 px-4 w-1/3">Current Active Value</th>
+                          <th className="py-2.5 px-4 w-1/3">Proposed Value</th>
+                          <th className="py-2.5 px-3 text-right">Variance / Delta</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {[
+                          { label: "Part Number", key: "part_no", isNumeric: false },
+                          { label: "Description", key: "description", isNumeric: false },
+                          { label: "Quantity", key: "qty", isNumeric: true, suffix: "" },
+                          { label: "Purchase Unit Price", key: "purchase_unit_price", isNumeric: true, suffix: " AED" },
+                          { label: "Margin %", key: "margin", isNumeric: true, suffix: "%" },
+                          { label: "Selling Unit Price", key: "selling_unit_price", isNumeric: true, suffix: " AED" },
+                          { label: "Purchase Total", key: "purchase_total", isNumeric: true, suffix: " AED" },
+                          { label: "Selling Total", key: "selling_total", isNumeric: true, suffix: " AED" },
+                          { label: "Supplier / Vendor", key: "vendor", isNumeric: false },
+                          { label: "Brand", key: "brand", isNumeric: false },
+                        ].map((row) => {
+                          const origVal = selectedProposalForDiff.original_data?.[row.key];
+                          const propVal = selectedProposalForDiff.proposed_data?.[row.key];
+                          const isChanged =
+                            origVal !== undefined &&
+                            propVal !== undefined &&
+                            String(origVal).trim() !== String(propVal).trim();
+
+                          let deltaText = "—";
+                          if (isChanged && row.isNumeric) {
+                            const diff = Number(propVal) - Number(origVal);
+                            deltaText = `${diff > 0 ? "+" : ""}${diff.toFixed(2)}${row.suffix || ""}`;
+                          } else if (isChanged) {
+                            deltaText = "Modified";
+                          }
+
+                          return (
+                            <tr
+                              key={row.key}
+                              className={`transition-colors ${isChanged ? "bg-amber-50/40 hover:bg-amber-50/70" : "hover:bg-slate-50/50"}`}
+                            >
+                              <td className="py-2.5 px-4 font-sans font-semibold text-slate-700">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{row.label}</span>
+                                  {isChanged && (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-amber-200 text-amber-900 border border-amber-300">
+                                      Changed
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className={`py-2.5 px-4 ${isChanged ? "text-slate-400 line-through bg-amber-50/60" : "text-slate-700"}`}>
+                                {origVal !== undefined && origVal !== null && String(origVal).trim() !== ""
+                                  ? `${origVal}${row.suffix || ""}`
+                                  : "—"}
+                              </td>
+                              <td className={`py-2.5 px-4 ${isChanged ? "font-bold text-emerald-700 bg-emerald-50/70" : "text-slate-700"}`}>
+                                {propVal !== undefined && propVal !== null && String(propVal).trim() !== ""
+                                  ? `${propVal}${row.suffix || ""}`
+                                  : "—"}
+                              </td>
+                              <td className="py-2.5 px-3 text-right">
+                                {isChanged ? (
+                                  <span className="font-bold text-indigo-700 font-mono text-[11px]">
+                                    {deltaText}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300 text-[11px]">Unchanged</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : selectedProposalForDiff.change_type === "ADD" ? (
+                <div className="space-y-3">
+                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-center gap-2">
+                    <span className="text-emerald-600 font-bold text-sm">✓</span>
+                    <span>This is a newly proposed item to be appended to the active Bill of Materials.</span>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {[
+                          { label: "Part Number", val: selectedProposalForDiff.proposed_data?.part_no },
+                          { label: "Description", val: selectedProposalForDiff.proposed_data?.description },
+                          { label: "Quantity", val: selectedProposalForDiff.proposed_data?.qty },
+                          { label: "Purchase Unit Price", val: `${selectedProposalForDiff.proposed_data?.purchase_unit_price || 0} AED` },
+                          { label: "Margin", val: `${selectedProposalForDiff.proposed_data?.margin || 0}%` },
+                          { label: "Selling Unit Price", val: `${selectedProposalForDiff.proposed_data?.selling_unit_price || 0} AED` },
+                          { label: "Purchase Total", val: `${selectedProposalForDiff.proposed_data?.purchase_total || 0} AED` },
+                          { label: "Selling Total", val: `${selectedProposalForDiff.proposed_data?.selling_total || 0} AED` },
+                          { label: "Supplier / Vendor", val: selectedProposalForDiff.proposed_data?.vendor || "—" },
+                          { label: "Brand", val: selectedProposalForDiff.proposed_data?.brand || "—" },
+                        ].map((row) => (
+                          <tr key={row.label} className="hover:bg-slate-50/50">
+                            <td className="py-2.5 px-4 font-sans font-semibold text-slate-700 w-1/3">{row.label}</td>
+                            <td className="py-2.5 px-4 font-bold text-emerald-800 bg-emerald-50/30">{row.val || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-xs text-rose-900 flex items-center gap-2">
+                    <span className="text-rose-600 font-bold text-sm">⚠️</span>
+                    <span>The submitter requested complete deletion of this item from the active Bill of Materials.</span>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {[
+                          { label: "Item ID", val: `#${selectedProposalForDiff.costing_item_id}` },
+                          { label: "Part Number", val: selectedProposalForDiff.original_data?.part_no },
+                          { label: "Description", val: selectedProposalForDiff.original_data?.description },
+                          { label: "Quantity", val: selectedProposalForDiff.original_data?.qty },
+                          { label: "Purchase Total", val: `${selectedProposalForDiff.original_data?.purchase_total || 0} AED` },
+                          { label: "Selling Total", val: `${selectedProposalForDiff.original_data?.selling_total || 0} AED` },
+                        ].map((row) => (
+                          <tr key={row.label} className="hover:bg-slate-50/50">
+                            <td className="py-2.5 px-4 font-sans font-semibold text-slate-700 w-1/3">{row.label}</td>
+                            <td className="py-2.5 px-4 font-medium text-slate-700 line-through text-rose-600">{row.val || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Actions Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedProposalForDiff(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+
+              {isAdmin() ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isProcessingProposalAction}
+                    onClick={() => handleRejectProposal(selectedProposalForDiff)}
+                    className="px-4 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Reject & Discard (Delete from Temp DB) ✕
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isProcessingProposalAction}
+                    onClick={() => handleApproveProposal(selectedProposalForDiff)}
+                    className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Approve & Apply to Live Sheet ✓
+                  </button>
+                </div>
+              ) : (
+                <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-3 py-1 rounded-lg">
+                  Proposal Pending Admin Review
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

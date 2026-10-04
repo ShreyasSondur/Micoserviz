@@ -1,5 +1,5 @@
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 
@@ -97,6 +97,7 @@ class ProjectBase(BaseModel):
     engineering_status: Optional[str] = "not_started"
     budget_status: Optional[str] = "not_started"
     procurement_status: Optional[str] = "not_started"
+    soa_status: Optional[str] = "not_started"
     resource_status: Optional[str] = "not_started"
     site_execution_status: Optional[str] = "not_started"
     handover_status: Optional[str] = "not_started"
@@ -120,6 +121,7 @@ class ProjectUpdate(BaseModel):
     engineering_status: Optional[str] = None
     budget_status: Optional[str] = None
     procurement_status: Optional[str] = None
+    soa_status: Optional[str] = None
     resource_status: Optional[str] = None
     site_execution_status: Optional[str] = None
     handover_status: Optional[str] = None
@@ -174,6 +176,33 @@ class CostingItemResponse(CostingItemBase):
 
     class Config:
         from_attributes = True
+
+
+class CostingProposalCreate(BaseModel):
+    change_type: str  # "ADD", "EDIT", "DELETE"
+    costing_item_id: Optional[int] = None
+    proposed_by_name: Optional[str] = "Team Member"
+    proposed_by_role: Optional[str] = "User"
+    proposed_data: Dict[str, Any] = {}
+    notes: Optional[str] = ""
+
+
+class CostingProposalResponse(BaseModel):
+    id: int
+    project_key: str
+    change_type: str
+    costing_item_id: Optional[int] = None
+    proposed_by_name: str
+    proposed_by_role: str
+    original_data: Dict[str, Any]
+    proposed_data: Dict[str, Any]
+    status: str
+    notes: Optional[str] = ""
+    created_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    reviewed_by: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SOAItemBase(BaseModel):
