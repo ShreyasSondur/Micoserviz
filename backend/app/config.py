@@ -33,7 +33,9 @@ class Settings(BaseSettings):
     def resolve_database_url(cls, v: Any) -> str:
         if isinstance(v, str):
             if v.startswith("postgres://"):
-                v = v.replace("postgres://", "postgresql://", 1)
+                v = v.replace("postgres://", "postgresql+psycopg2://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+"):
+                v = v.replace("postgresql://", "postgresql+psycopg2://", 1)
             elif v.startswith("sqlite"):
                 # If it's a relative path sqlite URL like sqlite:///./microservice.db
                 db_path = BACKEND_DIR / "microservice.db"

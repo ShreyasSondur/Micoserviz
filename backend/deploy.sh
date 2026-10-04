@@ -90,7 +90,7 @@ pip install --upgrade pip
 if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     pip install -r "$SCRIPT_DIR/requirements.txt"
 fi
-pip install gunicorn uvicorn psycopg2-binary httpx openpyxl
+pip install gunicorn uvicorn psycopg2-binary "psycopg[binary]" httpx openpyxl
 
 echo -e "${GREEN}✓ Python dependencies installed successfully.${NC}"
 
