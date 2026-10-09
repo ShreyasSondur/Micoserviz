@@ -92,7 +92,10 @@ if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
 fi
 pip install gunicorn uvicorn psycopg2-binary "psycopg[binary]" httpx openpyxl
 
-echo -e "${GREEN}✓ Python dependencies installed successfully.${NC}"
+echo -e "\n${YELLOW}Running database schema migration & safeguards...${NC}"
+python "$SCRIPT_DIR/migrate_db.py"
+
+echo -e "${GREEN}✓ Python dependencies and database migration verified successfully.${NC}"
 
 # 6. Setup Systemd Service Daemon (Running on isolated port 8080)
 echo -e "\n${YELLOW}[6/8] Creating Systemd service for auto-restart & background execution...${NC}"

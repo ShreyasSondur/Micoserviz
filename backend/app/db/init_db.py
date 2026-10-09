@@ -10,155 +10,235 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _apply_sqlite_safeguards():
-    """Apply SQLite specific table/column safeguards if migrating an existing local db."""
+def _apply_db_safeguards():
+    """Apply safe backward-compatible column/table migrations for both PostgreSQL and SQLite without data loss."""
+    is_postgres = engine.dialect.name == "postgresql"
+
     with engine.connect() as conn:
-        for col in [
-            "commercial_status",
-            "engineering_status",
-            "budget_status",
-            "procurement_status",
-            "soa_status",
-            "resource_status",
-            "site_execution_status",
-            "handover_status",
-        ]:
+        # 1. Projects table new columns
+        project_columns = [
+            ("commercial_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("engineering_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("budget_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("procurement_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("soa_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("resource_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("site_execution_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("handover_status", "VARCHAR(50) DEFAULT 'not_started'"),
+            ("verified_progress_percentage", "FLOAT DEFAULT 0.0"),
+            ("description", "TEXT DEFAULT ''"),
+            ("is_completed", "BOOLEAN DEFAULT FALSE"),
+            ("completed_at", "VARCHAR(50)"),
+        ]
+
+        for col_name, col_type in project_columns:
             try:
-                conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col} VARCHAR(50) DEFAULT 'not_started'"))
+                if is_postgres:
+                    conn.execute(text(f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                else:
+                    conn.execute(text(f"ALTER TABLE projects ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
             except Exception:
                 pass
 
+        # 2. Costing items new columns
         try:
-            conn.execute(text("ALTER TABLE project_costing_items ADD COLUMN allocated_qty FLOAT DEFAULT 0.0"))
+            if is_postgres:
+                conn.execute(text("ALTER TABLE project_costing_items ADD COLUMN IF NOT EXISTS allocated_qty FLOAT DEFAULT 0.0"))
+            else:
+                conn.execute(text("ALTER TABLE project_costing_items ADD COLUMN allocated_qty FLOAT DEFAULT 0.0"))
             conn.commit()
         except Exception:
             pass
 
+        # 3. Resource items new columns
         try:
-            conn.execute(text("ALTER TABLE project_resource_items ADD COLUMN date VARCHAR(50)"))
+            if is_postgres:
+                conn.execute(text("ALTER TABLE project_resource_items ADD COLUMN IF NOT EXISTS date VARCHAR(50)"))
+            else:
+                conn.execute(text("ALTER TABLE project_resource_items ADD COLUMN date VARCHAR(50)"))
             conn.commit()
         except Exception:
             pass
 
-        for col_def in [
-            "stage_number INTEGER DEFAULT 1",
-            "document_url TEXT DEFAULT ''",
-            "document_name VARCHAR(255) DEFAULT ''",
-            "document_size VARCHAR(50) DEFAULT ''",
-        ]:
+        # 4. SOA items new columns
+        soa_columns = [
+            ("stage_number", "INTEGER DEFAULT 1"),
+            ("document_url", "TEXT DEFAULT ''"),
+            ("document_name", "VARCHAR(255) DEFAULT ''"),
+            ("document_size", "VARCHAR(50) DEFAULT ''"),
+        ]
+        for col_name, col_type in soa_columns:
             try:
-                conn.execute(text(f"ALTER TABLE project_soa_items ADD COLUMN {col_def}"))
+                if is_postgres:
+                    conn.execute(text(f"ALTER TABLE project_soa_items ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                else:
+                    conn.execute(text(f"ALTER TABLE project_soa_items ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
             except Exception:
                 pass
 
+        # 5. Site Execution logs new columns & table
         try:
-            conn.execute(text("ALTER TABLE projects ADD COLUMN verified_progress_percentage FLOAT DEFAULT 0.0"))
+            if is_postgres:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS project_site_execution_logs (
+                        id SERIAL PRIMARY KEY,
+                        project_key VARCHAR(50) NOT NULL,
+                        date VARCHAR(50) NOT NULL,
+                        supervisor_name VARCHAR(150) DEFAULT 'Site Supervisor',
+                        creator_role VARCHAR(50) DEFAULT 'Site Supervisor',
+                        phase_name VARCHAR(200) DEFAULT 'Daily Site Progress',
+                        description TEXT DEFAULT '',
+                        images_json TEXT DEFAULT '[]',
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                    )
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS project_site_execution_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        project_key VARCHAR(50) NOT NULL,
+                        date VARCHAR(50) NOT NULL,
+                        supervisor_name VARCHAR(150) DEFAULT 'Site Supervisor',
+                        creator_role VARCHAR(50) DEFAULT 'Site Supervisor',
+                        phase_name VARCHAR(200) DEFAULT 'Daily Site Progress',
+                        description TEXT DEFAULT '',
+                        images_json TEXT DEFAULT '[]',
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                    )
+                """))
             conn.commit()
         except Exception:
             pass
 
         try:
-            conn.execute(text("ALTER TABLE projects ADD COLUMN description TEXT DEFAULT ''"))
+            if is_postgres:
+                conn.execute(text("ALTER TABLE project_site_execution_logs ADD COLUMN IF NOT EXISTS creator_role VARCHAR(50) DEFAULT 'Site Supervisor'"))
+            else:
+                conn.execute(text("ALTER TABLE project_site_execution_logs ADD COLUMN creator_role VARCHAR(50) DEFAULT 'Site Supervisor'"))
             conn.commit()
         except Exception:
             pass
 
+        # 6. Activity logs table
         try:
-            conn.execute(text("UPDATE projects SET total_stages = 7 WHERE total_stages != 7 OR total_stages IS NULL"))
+            if is_postgres:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS activity_logs (
+                        id SERIAL PRIMARY KEY,
+                        "user" VARCHAR(150) NOT NULL DEFAULT 'Admin',
+                        project_name VARCHAR(200) NOT NULL DEFAULT '—',
+                        project_key VARCHAR(100),
+                        module VARCHAR(100) NOT NULL,
+                        action TEXT NOT NULL,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS activity_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user VARCHAR(150) NOT NULL DEFAULT 'Admin',
+                        project_name VARCHAR(200) NOT NULL DEFAULT '—',
+                        project_key VARCHAR(100),
+                        module VARCHAR(100) NOT NULL,
+                        action TEXT NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
             conn.commit()
         except Exception:
             pass
 
-        # Create project_site_execution_logs table if not exists
+        # 7. Procurement items table
         try:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS project_site_execution_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_key VARCHAR(50) NOT NULL,
-                    date VARCHAR(50) NOT NULL,
-                    supervisor_name VARCHAR(150) DEFAULT 'Site Supervisor',
-                    creator_role VARCHAR(50) DEFAULT 'Site Supervisor',
-                    phase_name VARCHAR(200) DEFAULT 'Daily Site Progress',
-                    description TEXT DEFAULT '',
-                    images_json TEXT DEFAULT '[]',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (project_key) REFERENCES projects(project_key)
-                )
-            """))
-            conn.commit()
-        except Exception:
-            pass
-
-        try:
-            conn.execute(text("ALTER TABLE project_site_execution_logs ADD COLUMN creator_role VARCHAR(50) DEFAULT 'Site Supervisor'"))
-            conn.commit()
-        except Exception:
-            pass
-
-        # Create activity_logs table if not exists
-        try:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user VARCHAR(150) NOT NULL DEFAULT 'Admin',
-                    project_name VARCHAR(200) NOT NULL DEFAULT '—',
-                    project_key VARCHAR(100),
-                    module VARCHAR(100) NOT NULL,
-                    action TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            conn.commit()
-        except Exception:
-            pass
-
-        # Create project_procurement_items table if not exists
-        try:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS project_procurement_items (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_key VARCHAR(50) NOT NULL,
-                    sl_no INTEGER DEFAULT 1,
-                    part_no VARCHAR(100) NOT NULL DEFAULT '',
-                    product_name VARCHAR(255) NOT NULL DEFAULT '',
-                    vendor VARCHAR(150) DEFAULT '',
-                    brand VARCHAR(150) DEFAULT '',
-                    qty FLOAT NOT NULL DEFAULT 1.0,
-                    allocated_qty FLOAT NOT NULL DEFAULT 0.0,
-                    status VARCHAR(50) NOT NULL DEFAULT 'Yet To Order',
-                    invoice_number VARCHAR(100) DEFAULT '',
-                    notes TEXT DEFAULT '',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (project_key) REFERENCES projects(project_key)
-                )
-            """))
+            if is_postgres:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS project_procurement_items (
+                        id SERIAL PRIMARY KEY,
+                        project_key VARCHAR(50) NOT NULL,
+                        sl_no INTEGER DEFAULT 1,
+                        part_no VARCHAR(100) NOT NULL DEFAULT '',
+                        product_name VARCHAR(255) NOT NULL DEFAULT '',
+                        vendor VARCHAR(150) DEFAULT '',
+                        brand VARCHAR(150) DEFAULT '',
+                        qty FLOAT NOT NULL DEFAULT 1.0,
+                        allocated_qty FLOAT NOT NULL DEFAULT 0.0,
+                        status VARCHAR(50) NOT NULL DEFAULT 'Yet To Order',
+                        invoice_number VARCHAR(100) DEFAULT '',
+                        notes TEXT DEFAULT '',
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                    )
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS project_procurement_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        project_key VARCHAR(50) NOT NULL,
+                        sl_no INTEGER DEFAULT 1,
+                        part_no VARCHAR(100) NOT NULL DEFAULT '',
+                        product_name VARCHAR(255) NOT NULL DEFAULT '',
+                        vendor VARCHAR(150) DEFAULT '',
+                        brand VARCHAR(150) DEFAULT '',
+                        qty FLOAT NOT NULL DEFAULT 1.0,
+                        allocated_qty FLOAT NOT NULL DEFAULT 0.0,
+                        status VARCHAR(50) NOT NULL DEFAULT 'Yet To Order',
+                        invoice_number VARCHAR(100) DEFAULT '',
+                        notes TEXT DEFAULT '',
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                    )
+                """))
             conn.commit()
         except Exception as e:
             logger.warning(f"Procurement table check: {e}")
 
-        # Create project_costing_proposals table if not exists (Temporary table for non-admin proposed changes)
+        # 8. Costing proposals table
         try:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS project_costing_proposals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_key VARCHAR(50) NOT NULL,
-                    change_type VARCHAR(20) NOT NULL,
-                    costing_item_id INTEGER,
-                    proposed_by_name VARCHAR(100) DEFAULT 'Team Member',
-                    proposed_by_role VARCHAR(100) DEFAULT 'User',
-                    original_data_json TEXT DEFAULT '{}',
-                    proposed_data_json TEXT DEFAULT '{}',
-                    status VARCHAR(30) DEFAULT 'pending',
-                    notes VARCHAR(255) DEFAULT '',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    reviewed_at DATETIME,
-                    reviewed_by VARCHAR(100),
-                    FOREIGN KEY (project_key) REFERENCES projects(project_key)
-                )
-            """))
+            if is_postgres:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS project_costing_proposals (
+                        id SERIAL PRIMARY KEY,
+                        project_key VARCHAR(50) NOT NULL,
+                        change_type VARCHAR(20) NOT NULL,
+                        costing_item_id INTEGER,
+                        proposed_by_name VARCHAR(100) DEFAULT 'Team Member',
+                        proposed_by_role VARCHAR(100) DEFAULT 'User',
+                        original_data_json TEXT DEFAULT '{}',
+                        proposed_data_json TEXT DEFAULT '{}',
+                        status VARCHAR(30) DEFAULT 'pending',
+                        notes VARCHAR(255) DEFAULT '',
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        reviewed_at TIMESTAMP WITHOUT TIME ZONE,
+                        reviewed_by VARCHAR(100),
+                        FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                    )
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS project_costing_proposals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        project_key VARCHAR(50) NOT NULL,
+                        change_type VARCHAR(20) NOT NULL,
+                        costing_item_id INTEGER,
+                        proposed_by_name VARCHAR(100) DEFAULT 'Team Member',
+                        proposed_by_role VARCHAR(100) DEFAULT 'User',
+                        original_data_json TEXT DEFAULT '{}',
+                        proposed_data_json TEXT DEFAULT '{}',
+                        status VARCHAR(30) DEFAULT 'pending',
+                        notes VARCHAR(255) DEFAULT '',
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        reviewed_at DATETIME,
+                        reviewed_by VARCHAR(100),
+                        FOREIGN KEY (project_key) REFERENCES projects(project_key)
+                    )
+                """))
             conn.commit()
         except Exception as e:
             logger.warning(f"Costing proposals table check: {e}")
@@ -168,9 +248,8 @@ def init_db(db: Session) -> None:
     # 1. Create tables natively via SQLAlchemy models
     Base.metadata.create_all(bind=engine)
 
-    # 1.1 Run SQLite backward compatibility guards only if SQLite dialect
-    if engine.dialect.name == "sqlite":
-        _apply_sqlite_safeguards()
+    # 1.1 Apply universal safeguards to add missing columns without data loss
+    _apply_db_safeguards()
 
     # 2. Sync Admin from .env safely without unique constraint collisions
     by_username = db.query(User).filter(User.username == settings.ADMIN_USERNAME).first()
