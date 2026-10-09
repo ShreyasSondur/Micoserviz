@@ -91,6 +91,7 @@ class ProjectBase(BaseModel):
     supervisor: Optional[str] = "Site Supervisor"
     start_date: Optional[str] = None
     budget: Optional[str] = ""
+    description: Optional[str] = ""
     is_completed: bool = False
     completed_at: Optional[str] = None
     commercial_status: Optional[str] = "not_started"
@@ -114,6 +115,7 @@ class ProjectUpdate(BaseModel):
     location: Optional[str] = None
     priority: Optional[str] = None
     priority_level: Optional[str] = None
+    description: Optional[str] = None
     current_stage: Optional[int] = None
     is_completed: Optional[bool] = None
     completed_at: Optional[str] = None

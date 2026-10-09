@@ -22,6 +22,7 @@ class Project(Base):
     supervisor = Column(String(100), default="Site Supervisor")
     start_date = Column(String(50), nullable=True)
     budget = Column(String(50), default="", nullable=True)
+    description = Column(Text, nullable=True, default="")
     is_completed = Column(Boolean, default=False)
     completed_at = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

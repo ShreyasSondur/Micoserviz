@@ -429,6 +429,7 @@ def get_projects(db: Session = Depends(get_db)):
                 supervisor=p.supervisor or "Site Supervisor",
                 start_date=p.start_date,
                 budget=compute_total_contract_value(comm_res, p.budget),
+                description=p.description or "",
                 is_completed=bool(p.is_completed or completed_cnt >= 7),
                 completed_at=p.completed_at,
                 commercial_status=p.commercial_status or "not_started",
@@ -472,6 +473,7 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
         supervisor=data.supervisor,
         start_date=data.start_date,
         budget=data.budget,
+        description=data.description or "",
         is_completed=data.is_completed,
         commercial_status=data.commercial_status or "not_started",
         engineering_status=data.engineering_status or "not_started",
@@ -534,6 +536,7 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
         supervisor=p.supervisor,
         start_date=p.start_date,
         budget=p.budget,
+        description=p.description or "",
         is_completed=p.is_completed,
         completed_at=p.completed_at,
         commercial_status=p.commercial_status or "not_started",
@@ -646,6 +649,7 @@ def get_project_by_key(project_key: str, db: Session = Depends(get_db)):
         supervisor=p.supervisor or "Site Supervisor",
         start_date=p.start_date,
         budget=compute_total_contract_value(comm_res, p.budget),
+        description=p.description or "",
         is_completed=bool(p.is_completed or completed_cnt >= 7),
         completed_at=p.completed_at,
         commercial_status=p.commercial_status or "not_started",
@@ -679,6 +683,8 @@ def update_project(project_key: str, data: ProjectUpdate, db: Session = Depends(
     if data.priority is not None:
         p.priority = data.priority
         p.priority_level = "high" if data.priority.lower() == "high" else "medium" if data.priority.lower() == "medium" else "low"
+    if data.description is not None:
+        p.description = data.description
     if data.current_stage is not None:
         p.current_stage = data.current_stage
     if data.is_completed is not None:
@@ -2378,7 +2384,6 @@ def get_project_timeline_pdf(
     """
     Downloads or streams the latest Master Timeline Dossier PDF for the project.
     """
-    import io
     from app.services.b2_storage import b2_storage
     from app.services.archiver import sync_project_timeline_dossier
     
@@ -2389,16 +2394,22 @@ def get_project_timeline_pdf(
     if not pdf_bytes:
         # Generate on the fly
         sync_res = sync_project_timeline_dossier(p.project_key, db=db)
-        pdf_bytes = b2_storage.download_bytes(b2_key)
+        if isinstance(sync_res, dict) and sync_res.get("pdf_bytes"):
+            pdf_bytes = sync_res["pdf_bytes"]
+        else:
+            pdf_bytes = b2_storage.download_bytes(b2_key)
         
     if not pdf_bytes:
         raise HTTPException(status_code=500, detail="Could not generate or retrieve project dossier PDF.")
         
     clean_pk = p.project_key.replace(" ", "_")
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=Project_{clean_pk}_Timeline_Dossier.pdf"}
+        headers={
+            "Content-Disposition": f'attachment; filename="Project_{clean_pk}_Timeline_Dossier.pdf"',
+            "Content-Length": str(len(pdf_bytes)),
+        }
     )
 
 

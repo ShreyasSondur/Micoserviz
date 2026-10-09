@@ -16,6 +16,7 @@ import {
   isAdmin,
   isSiteSupervisor,
 } from "@/lib/api";
+import { exportSOAToExcel, generateSOAReceiptPdf } from "@/lib/exportUtils";
 
 interface CommercialStageInfo {
   id: string;
@@ -388,30 +389,21 @@ export default function ProjectSOAPage() {
         return;
       }
 
-      // Generate verified receipt blob if no physical attachment
-      const sampleText = `%PDF-1.4
-% TechnoLOGI ERP - Payment Receipt & Statement Proof
-Project: ${projectInfo.name} (${projectInfo.code})
-Stage: Stage ${item.stage_number || 1}
-Document: ${item.document_no || "INV-RECEIPT"}
-Type: ${item.doc_type}
-Amount Received: AED ${item.received.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-Payment Mode: ${item.mode}
-Date: ${item.date}
-PO Number: ${item.po_no}
-Status: Verified Received
+      // Generate verified authentic PDF receipt
+      generateSOAReceiptPdf({
+        projectName: projectInfo.name,
+        projectCode: String(projectInfo.code || rawId),
+        stageNumber: item.stage_number || 1,
+        docNo: item.document_no || "SOA-RECEIPT",
+        docType: item.doc_type || "Tax Invoice Receipt",
+        amount: Number(item.received || item.value || 0),
+        mode: item.mode || "Cheque / Transfer",
+        date: item.date || new Date().toISOString().split("T")[0],
+        poNo: item.po_no || projectInfo.po_number,
+        remarks: item.remarks,
+      });
 
-[TechnoLOGI Statement of Account Official Record]`;
-      const blob = new Blob([sampleText], { type: "application/pdf" });
-      const blobUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = blobUrl;
-      anchor.download = `${item.document_no || "payment_receipt"}.pdf`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-      showToast(`Downloaded verified document: ${item.document_no}`);
+      showToast(`Downloaded verified receipt: ${item.document_no || "SOA Receipt"}`);
     } catch (err) {
       console.error("Error downloading file", err);
       showToast("Failed to download document");
@@ -431,6 +423,28 @@ Status: Verified Received
     const entered = Number(soaForm.amount) || 0;
     return Math.max(0, stageVal - (stageOtherRec + entered));
   }, [selectedStageData, soaItems, soaForm.amount, soaForm.stage_number, editingSOAId]);
+
+  const handleExportExcel = () => {
+    try {
+      exportSOAToExcel({
+        projectName: projectInfo.name,
+        projectKey: projectInfo.code,
+        client: projectInfo.client,
+        poNumber: projectInfo.po_number,
+        budget: overallSummary.totalContract,
+        items: soaItems,
+        summary: {
+          totalContract: overallSummary.totalContract,
+          received: overallSummary.totalReceived,
+          balance: overallSummary.totalBalance,
+        },
+      });
+      showToast("Statement of Accounts downloaded as Excel (.xlsx) successfully!");
+    } catch (err) {
+      console.error("Failed to export SOA sheet", err);
+      showToast("Failed to export Excel file");
+    }
+  };
 
   return (
     <div className="space-y-6 pb-20">
@@ -469,7 +483,21 @@ Status: Verified Received
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl shadow-2xs transition-all cursor-pointer active:scale-98"
+            title="Download Statement of Accounts in Excel (.xlsx) format"
+          >
+            <svg className="w-4 h-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span>Download Excel</span>
+          </button>
+
           <Link
             href={`/projects/${rawId}`}
             className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"

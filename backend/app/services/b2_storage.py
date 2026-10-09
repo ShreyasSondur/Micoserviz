@@ -71,9 +71,18 @@ class B2StorageService:
             "error": None,
         }
 
+        # Always save to local cache directory for fast local fallback
+        try:
+            local_cache_path = Path("uploads/b2_cache") / clean_key
+            local_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(local_cache_path, "wb") as f:
+                f.write(data)
+        except Exception as cache_err:
+            logger.debug(f"Local B2 cache write failed for {clean_key}: {cache_err}")
+
         s3 = self.client
         if not s3:
-            result["error"] = "B2 client is not configured or disabled"
+            result["error"] = "B2 client is not configured or disabled (stored locally)"
             return result
 
         try:
@@ -112,19 +121,22 @@ class B2StorageService:
         return self.upload_bytes(key, data, content_type=ct)
 
     def file_exists(self, key: str) -> bool:
-        """Checks if an object exists in Backblaze B2."""
-        s3 = self.client
-        if not s3:
-            return False
+        """Checks if an object exists in Backblaze B2 or local cache."""
         clean_key = key.lstrip("/").replace("\\", "/")
-        try:
-            s3.head_object(Bucket=self.bucket_name, Key=clean_key)
-            return True
-        except ClientError:
-            return False
+        s3 = self.client
+        if s3:
+            try:
+                s3.head_object(Bucket=self.bucket_name, Key=clean_key)
+                return True
+            except ClientError:
+                pass
+        
+        # Check local cache fallback
+        local_cache_path = Path("uploads/b2_cache") / clean_key
+        return local_cache_path.exists()
 
     def download_bytes(self, key: str) -> Optional[bytes]:
-        """Downloads an object directly from Backblaze B2."""
+        """Downloads an object directly from Backblaze B2 or local cache fallback."""
         clean_key = key.lstrip("/").replace("\\", "/")
         s3 = self.client
         if s3:
@@ -133,6 +145,16 @@ class B2StorageService:
                 return resp["Body"].read()
             except Exception as e:
                 logger.warning(f"Failed to fetch {clean_key} from B2: {e}")
+
+        # Check local cache fallback
+        local_cache_path = Path("uploads/b2_cache") / clean_key
+        if local_cache_path.exists():
+            try:
+                with open(local_cache_path, "rb") as f:
+                    return f.read()
+            except Exception as e:
+                logger.warning(f"Failed to read local cache for {clean_key}: {e}")
+
         return None
 
     def list_files(self, prefix: str = "", max_keys: int = 100) -> List[dict]:

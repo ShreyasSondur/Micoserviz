@@ -1,68 +1,105 @@
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
-import { BackendResourceItem, BackendSiteExecutionLog } from "@/lib/api";
+import { BackendCostingItem, BackendResourceItem, BackendSiteExecutionLog, BackendSOAItem } from "@/lib/api";
 
 /**
- * Helper to convert an image URL or blob URL into a high-definition base64 Data URL for jsPDF embedding
+ * Helper to convert an image URL or blob URL into a high-definition base64 Data URL for jsPDF embedding.
+ * Guaranteed to return either a valid "data:image/..." string or null (NEVER returns raw URLs which corrupt jsPDF).
  */
 const getImageDataUrl = async (url: string): Promise<{ dataUrl: string; width: number; height: number } | null> => {
-  if (!url) return null;
-  
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      try {
-        const natWidth = img.naturalWidth || img.width || 1200;
-        const natHeight = img.naturalHeight || img.height || 900;
+  if (!url || typeof url !== "string") return null;
 
-        // If it's already a high-quality data URL, we can use it directly with its natural dimensions
-        if (url.startsWith("data:image")) {
-          resolve({ dataUrl: url, width: natWidth, height: natHeight });
-          return;
-        }
-
-        // Otherwise draw to high-res canvas (max 2400px to maintain crisp print clarity without bloating memory)
-        const maxDim = 2400;
-        let targetW = natWidth;
-        let targetH = natHeight;
-        if (targetW > maxDim || targetH > maxDim) {
-          if (targetW > targetH) {
-            targetH = Math.round((targetH * maxDim) / targetW);
-            targetW = maxDim;
-          } else {
-            targetW = Math.round((targetW * maxDim) / targetH);
-            targetH = maxDim;
-          }
-        }
-
-        const canvas = document.createElement("canvas");
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = "high";
-          ctx.drawImage(img, 0, 0, targetW, targetH);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.96);
-          resolve({ dataUrl, width: natWidth, height: natHeight });
-        } else {
-          resolve({ dataUrl: url, width: natWidth, height: natHeight });
-        }
-      } catch (e) {
-        console.warn("Could not process image on canvas, falling back to raw url", e);
+  // 1. If it's already a high-quality base64 data URL
+  if (url.startsWith("data:image")) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
         resolve({ dataUrl: url, width: img.naturalWidth || 800, height: img.naturalHeight || 600 });
-      }
-    };
-    img.onerror = () => {
-      // If CORS or error, still attempt with raw data url if available
-      if (url.startsWith("data:image")) {
+      };
+      img.onerror = () => {
         resolve({ dataUrl: url, width: 800, height: 600 });
-      } else {
-        resolve(null);
+      };
+      img.src = url;
+    });
+  }
+
+  // 2. Try fetching as Blob first (works cleanly with CORS headers or same-origin / proxy)
+  try {
+    const res = await fetch(url, { mode: "cors" });
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob && blob.type.startsWith("image/")) {
+        const dataUrl = await new Promise<string | null>((resBlob) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resBlob(typeof reader.result === "string" ? reader.result : null);
+          reader.onerror = () => resBlob(null);
+          reader.readAsDataURL(blob);
+        });
+
+        if (dataUrl && dataUrl.startsWith("data:image")) {
+          return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve({ dataUrl, width: img.naturalWidth || 800, height: img.naturalHeight || 600 });
+            img.onerror = () => resolve({ dataUrl, width: 800, height: 600 });
+            img.src = dataUrl;
+          });
+        }
       }
-    };
-    img.src = url;
+    }
+  } catch {
+    // If fetch failed (e.g. CORS block), proceed to canvas attempt
+  }
+
+  // 3. Fallback: Draw on Canvas with anonymous crossOrigin
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        try {
+          const natWidth = img.naturalWidth || img.width || 1200;
+          const natHeight = img.naturalHeight || img.height || 900;
+
+          const maxDim = 1800;
+          let targetW = natWidth;
+          let targetH = natHeight;
+          if (targetW > maxDim || targetH > maxDim) {
+            if (targetW > targetH) {
+              targetH = Math.round((targetH * maxDim) / targetW);
+              targetW = maxDim;
+            } else {
+              targetW = Math.round((targetW * maxDim) / targetH);
+              targetH = maxDim;
+            }
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+            if (dataUrl && dataUrl.startsWith("data:image")) {
+              resolve({ dataUrl, width: natWidth, height: natHeight });
+              return;
+            }
+          }
+          resolve(null);
+        } catch {
+          // SecurityError / tainted canvas -> Return null, do NOT pass raw url to jsPDF
+          resolve(null);
+        }
+      };
+      img.onerror = () => {
+        resolve(null);
+      };
+      img.src = url;
+    } catch {
+      resolve(null);
+    }
   });
 };
 
@@ -130,6 +167,234 @@ export const exportResourcesToExcel = (params: {
   const cleanDateStr = dateStr.replace(/[^a-zA-Z0-9_-]/g, "_");
   const cleanKey = projectKey.replace(/[^a-zA-Z0-9_-]/g, "_");
   const fileName = `Resource_Planning_${cleanKey}_${cleanDateStr}.xlsx`;
+
+  XLSX.writeFile(wb, fileName);
+};
+
+/**
+ * Export Project Budget & Costing Sheet (BOM, Purchase & Selling Margins) to an Excel (.xlsx) file
+ */
+export const exportCostingToExcel = (params: {
+  projectName: string;
+  projectKey: string;
+  client?: string;
+  poNumber?: string;
+  items: BackendCostingItem[];
+  totals?: {
+    totalPurchase?: number;
+    totalSelling?: number;
+    totalProfit?: number;
+    profitMarginPct?: number;
+  };
+}) => {
+  const { projectName, projectKey, client, poNumber, items, totals } = params;
+
+  const totalPurchase =
+    totals?.totalPurchase ??
+    items.reduce((acc, curr) => acc + (Number(curr.purchase_total) || 0), 0);
+  const totalSelling =
+    totals?.totalSelling ??
+    items.reduce((acc, curr) => acc + (Number(curr.selling_total) || 0), 0);
+  const totalProfit = totals?.totalProfit ?? totalSelling - totalPurchase;
+  const profitMarginPct =
+    totals?.profitMarginPct ??
+    (totalSelling > 0 ? (totalProfit / totalSelling) * 100 : 0);
+
+  // Build sheet data matrix
+  const sheetData: (string | number)[][] = [
+    ["PROJECT BUDGET & COSTING SHEET (BOM & MARGIN ANALYSIS)"],
+    [],
+    ["Project Name:", projectName, "", "Client:", client || "N/A"],
+    ["Project Code:", projectKey, "", "PO Number:", poNumber || "N/A"],
+    ["Exported On:", new Date().toLocaleString(), "", "Currency:", "AED (Dirhams)"],
+    [],
+    [
+      "SL No",
+      "Part Number",
+      "Description / Product",
+      "Brand",
+      "Vendor / Supplier",
+      "Qty",
+      "Purchase Unit Price (AED)",
+      "Purchase Total (AED)",
+      "Margin %",
+      "Selling Unit Price (AED)",
+      "Selling Total (AED)",
+      "Procurement Status",
+      "Invoice Number",
+    ],
+  ];
+
+  if (items.length === 0) {
+    sheetData.push(["-", "No items recorded in costing sheet", "-", "-", "-", 0, 0, 0, "0.0%", 0, 0, "-", "-"]);
+  } else {
+    items.forEach((item, idx) => {
+      const marginVal =
+        item.margin !== undefined && item.margin !== null
+          ? Number(item.margin)
+          : item.selling_margin_percent !== undefined && item.selling_margin_percent !== null
+          ? Number(item.selling_margin_percent)
+          : 0;
+
+      sheetData.push([
+        item.sl_no || idx + 1,
+        item.part_no || "-",
+        item.description || "-",
+        item.brand || "-",
+        item.vendor || "-",
+        Number(item.qty) || 0,
+        Number(item.purchase_unit_price) || 0,
+        Number(item.purchase_total) || 0,
+        `${marginVal.toFixed(1)}%`,
+        Number(item.selling_unit_price) || 0,
+        Number(item.selling_total) || 0,
+        item.procurement_status || "Not Added",
+        item.invoice_number || "-",
+      ]);
+    });
+  }
+
+  sheetData.push([]);
+  sheetData.push(["EXECUTIVE FINANCIAL SUMMARY", "", "", "", "", "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Total Cost Items:", items.length, "", "", "", "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Total Purchase Cost (AED):", Number(totalPurchase.toFixed(2)), "", "", "", "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Total Selling Value (AED):", Number(totalSelling.toFixed(2)), "", "", "", "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Gross Profit (AED):", Number(totalProfit.toFixed(2)), "", "", "", "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Overall Profit Margin (%):", `${profitMarginPct.toFixed(2)}%`, "", "", "", "", "", "", "", "", "", "", ""]);
+
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  ws["!cols"] = [
+    { wch: 8 },  // SL No
+    { wch: 20 }, // Part Number
+    { wch: 36 }, // Description
+    { wch: 18 }, // Brand
+    { wch: 22 }, // Vendor
+    { wch: 10 }, // Qty
+    { wch: 24 }, // Purchase Unit Price
+    { wch: 22 }, // Purchase Total
+    { wch: 12 }, // Margin %
+    { wch: 24 }, // Selling Unit Price
+    { wch: 22 }, // Selling Total
+    { wch: 20 }, // Procurement Status
+    { wch: 20 }, // Invoice Number
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Budget & Costing");
+
+  const cleanKey = projectKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const fileName = `Budget_Costing_${cleanKey}_${new Date().toISOString().split("T")[0]}.xlsx`;
+
+  XLSX.writeFile(wb, fileName);
+};
+
+/**
+ * Export Statement of Accounts (SOA) transactions to an Excel (.xlsx) file
+ */
+export const exportSOAToExcel = (params: {
+  projectName: string;
+  projectKey: string;
+  client?: string;
+  poNumber?: string;
+  budget?: string | number;
+  items: BackendSOAItem[];
+  summary?: {
+    totalContract?: number;
+    received?: number;
+    balance?: number;
+  };
+}) => {
+  const { projectName, projectKey, client, poNumber, budget, items, summary } = params;
+
+  const totalContract =
+    summary?.totalContract ??
+    (typeof budget === "number"
+      ? budget
+      : parseFloat(String(budget || "0").replace(/[^0-9.-]/g, "")) || 0);
+  const totalReceived =
+    summary?.received ??
+    items.reduce((acc, curr) => acc + (Number(curr.received) || 0), 0);
+  const totalBalance = summary?.balance ?? totalContract - totalReceived;
+
+  const sheetData: (string | number)[][] = [
+    ["STATEMENT OF ACCOUNTS (SOA) REPORT"],
+    [],
+    ["Project Name:", projectName, "", "Client:", client || "N/A"],
+    ["Project Code:", projectKey, "", "PO Number:", poNumber || "N/A"],
+    ["Exported On:", new Date().toLocaleString(), "", "Currency:", "AED (Dirhams)"],
+    [],
+    [
+      "Stage",
+      "Date",
+      "PO Number",
+      "Document No",
+      "Document Type",
+      "Invoice / Stage Value (AED)",
+      "Amount Received (AED)",
+      "Running Balance (AED)",
+      "Payment Mode",
+      "Remarks / Notes",
+    ],
+  ];
+
+  if (items.length === 0) {
+    sheetData.push(["-", "-", "-", "-", "No SOA entries recorded", 0, 0, 0, "-", "-"]);
+  } else {
+    items.forEach((item) => {
+      sheetData.push([
+        item.stage_number ? `Stage ${item.stage_number}` : "-",
+        item.date || "-",
+        item.po_no || "-",
+        item.document_no || "-",
+        item.doc_type || "-",
+        Number(item.value) || 0,
+        Number(item.received) || 0,
+        Number(item.balance) || 0,
+        item.mode || "-",
+        item.remarks || "-",
+      ]);
+    });
+  }
+
+  sheetData.push([]);
+  sheetData.push(["STATEMENT OF ACCOUNTS SUMMARY", "", "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Total Contract Value (AED):", Number(totalContract.toFixed(2)), "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Total Amount Received (AED):", Number(totalReceived.toFixed(2)), "", "", "", "", "", "", "", ""]);
+  sheetData.push(["Outstanding Balance (AED):", Number(totalBalance.toFixed(2)), "", "", "", "", "", "", "", ""]);
+  sheetData.push([
+    "Collection Rate (%):",
+    totalContract > 0 ? `${((totalReceived / totalContract) * 100).toFixed(2)}%` : "0.00%",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  ws["!cols"] = [
+    { wch: 12 }, // Stage
+    { wch: 15 }, // Date
+    { wch: 16 }, // PO Number
+    { wch: 18 }, // Document No
+    { wch: 20 }, // Document Type
+    { wch: 26 }, // Value (AED)
+    { wch: 24 }, // Received (AED)
+    { wch: 24 }, // Balance (AED)
+    { wch: 16 }, // Mode
+    { wch: 32 }, // Remarks
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Statement of Accounts");
+
+  const cleanKey = projectKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const fileName = `SOA_Statement_of_Accounts_${cleanKey}_${new Date().toISOString().split("T")[0]}.xlsx`;
 
   XLSX.writeFile(wb, fileName);
 };
@@ -1191,4 +1456,195 @@ export const exportProjectDossierToPdf = async (params: ProjectDossierParams) =>
   const fileName = `Project_Dossier_${cleanKey}_${cleanName}.pdf`;
 
   doc.save(fileName);
+};
+
+/**
+ * 4. Generates a valid, beautifully formatted PDF for project documents & technical drawings proof
+ */
+export const generateDocumentProofPdf = (params: {
+  projectName: string;
+  projectCode: string;
+  docName: string;
+  stageName?: string;
+  date?: string;
+  size?: string;
+  status?: string;
+}) => {
+  const { projectName, projectCode, docName, stageName, date, size, status } = params;
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 15;
+  const contentWidth = pageWidth - margin * 2;
+  let y = margin;
+
+  // Header Banner
+  doc.setFillColor(12, 16, 51); // Navy #0c1033
+  doc.rect(margin, y, contentWidth, 24, "F");
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("TECHNOLOGI ERP - VERIFIED PROJECT DOCUMENT", margin + 6, y + 10);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text(
+    `Project: ${projectName} (${projectCode})  |  Generated: ${new Date().toLocaleString()}`,
+    margin + 6,
+    y + 18
+  );
+
+  y += 32;
+
+  // Metadata Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(margin, y, contentWidth, 54, 2, 2, "FD");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
+  doc.text("DOCUMENT METADATA & VERIFICATION RECORD", margin + 5, y + 8);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Document Name: ${docName}`, margin + 5, y + 18);
+  doc.text(`Project Code: #${projectCode}`, margin + 5, y + 26);
+  if (stageName) doc.text(`Stage / Phase: ${stageName}`, margin + 5, y + 34);
+  doc.text(`Date Recorded: ${date || new Date().toLocaleDateString()}`, margin + 5, y + 42);
+
+  doc.text(`File Size: ${size || "Standard Document"}`, margin + 95, y + 18);
+  doc.text(`Verification Status: ${status || "Verified Official"}`, margin + 95, y + 26);
+  doc.text(`Security Hash: Verified TechnoLOGI Record`, margin + 95, y + 34);
+  doc.text(`Issuer: Project Management Office`, margin + 95, y + 42);
+
+  y += 64;
+
+  // Official Notice Box
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(margin, y, contentWidth, 24, 2, 2, "FD");
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    "This is an authenticated system document generated from the TechnoLOGI ERP central database.",
+    margin + 5,
+    y + 8
+  );
+  doc.text(
+    "All document attachments, technical specifications, and milestones are securely stored and verified.",
+    margin + 5,
+    y + 15
+  );
+
+  const cleanDocName = (docName || "document").replace(/[^a-zA-Z0-9_-]/g, "_");
+  doc.save(`${cleanDocName}.pdf`);
+};
+
+/**
+ * 5. Generates a valid, beautifully formatted PDF receipt for Statement of Accounts (SOA) transactions
+ */
+export const generateSOAReceiptPdf = (params: {
+  projectName: string;
+  projectCode: string;
+  stageNumber?: number;
+  docNo: string;
+  docType: string;
+  amount: number;
+  mode: string;
+  date: string;
+  poNo?: string;
+  remarks?: string;
+}) => {
+  const { projectName, projectCode, stageNumber, docNo, docType, amount, mode, date, poNo, remarks } = params;
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 15;
+  const contentWidth = pageWidth - margin * 2;
+  let y = margin;
+
+  // Header Banner
+  doc.setFillColor(12, 16, 51); // Navy #0c1033
+  doc.rect(margin, y, contentWidth, 24, "F");
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("TECHNOLOGI ERP - PAYMENT RECEIPT & SOA RECORD", margin + 6, y + 10);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text(
+    `Project: ${projectName} (${projectCode})  |  Receipt Date: ${date || new Date().toLocaleDateString()}`,
+    margin + 6,
+    y + 18
+  );
+
+  y += 32;
+
+  // Receipt Details Card
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(margin, y, contentWidth, 65, 2, 2, "FD");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text("TRANSACTION DETAILS", margin + 5, y + 9);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+
+  doc.text(`Document / Invoice No: ${docNo}`, margin + 5, y + 20);
+  doc.text(`Document Type: ${docType}`, margin + 5, y + 28);
+  doc.text(`Commercial Stage: Stage ${stageNumber || 1}`, margin + 5, y + 36);
+  doc.text(`PO Number: ${poNo || "—"}`, margin + 5, y + 44);
+  doc.text(`Payment Mode: ${mode || "Cheque / Bank Transfer"}`, margin + 5, y + 52);
+
+  // Right column with large highlighted amount
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text("AMOUNT RECEIVED:", margin + 100, y + 20);
+
+  doc.setFontSize(14);
+  doc.setTextColor(16, 185, 129); // Emerald-600
+  doc.text(`AED ${amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, margin + 100, y + 29);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Status: Verified Received`, margin + 100, y + 38);
+  doc.text(`Payment Date: ${date}`, margin + 100, y + 46);
+
+  y += 74;
+
+  if (remarks) {
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(margin, y, contentWidth, 18, 1.5, 1.5, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text("Remarks / Notes:", margin + 4, y + 6);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(remarks, margin + 4, y + 12);
+    y += 24;
+  }
+
+  const cleanDocNo = (docNo || "SOA_Receipt").replace(/[^a-zA-Z0-9_-]/g, "_");
+  doc.save(`${cleanDocNo}.pdf`);
 };

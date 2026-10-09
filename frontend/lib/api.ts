@@ -1717,6 +1717,7 @@ export interface BackendProjectItem {
   supervisor?: string;
   start_date?: string;
   budget?: string;
+  description?: string;
   is_completed: boolean;
   completed_at?: string;
   commercial_status: SectionStatusType;

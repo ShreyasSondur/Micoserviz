@@ -411,6 +411,7 @@ def sync_project_timeline_dossier(
             "project_name": proj.name,
             "key": b2_key,
             "size_bytes": len(pdf_bytes),
+            "pdf_bytes": pdf_bytes,
             "b2_uploaded": upload_result.get("b2_uploaded", False),
             "b2_result": upload_result,
         }

@@ -60,6 +60,12 @@ def _apply_sqlite_safeguards():
             pass
 
         try:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN description TEXT DEFAULT ''"))
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
             conn.execute(text("UPDATE projects SET total_stages = 7 WHERE total_stages != 7 OR total_stages IS NULL"))
             conn.commit()
         except Exception:

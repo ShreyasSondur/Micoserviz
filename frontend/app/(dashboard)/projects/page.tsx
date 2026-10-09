@@ -46,6 +46,7 @@ export interface Project {
   code: string;
   priority: "High" | "Medium" | "Low";
   priorityLevel: "high" | "medium" | "low";
+  description?: string;
   currentStage: number; // 1 to 7
   totalStages: number;
   manager: string;
@@ -115,13 +116,22 @@ export default function ProjectsPage() {
   // Priority Dropdown State (In-place priority switcher)
   const [activePriorityMenuId, setActivePriorityMenuId] = useState<string | null>(null);
 
-
   // New Project modal state
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newClientName, setNewClientName] = useState("");
   const [newPriority, setNewPriority] = useState<"High" | "Medium" | "Low">("High");
+  const [newDescription, setNewDescription] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Edit Project modal state
+  const [isEditProjectOpen, setIsEditProjectOpen] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editProjectName, setEditProjectName] = useState("");
+  const [editClientName, setEditClientName] = useState("");
+  const [editPriority, setEditPriority] = useState<"High" | "Medium" | "Low">("High");
+  const [editDescription, setEditDescription] = useState("");
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -155,6 +165,7 @@ export default function ProjectsPage() {
             code: item.code,
             priority: (item.priority || "High") as "High" | "Medium" | "Low",
             priorityLevel: (item.priority_level || "high") as "high" | "medium" | "low",
+            description: item.description || "",
             currentStage: item.current_stage || calculatedStage,
             totalStages: 7,
             manager: item.manager || "Farhan Malik",
@@ -287,6 +298,7 @@ export default function ProjectsPage() {
       code: `PRJ-2024-00${projects.length + 1}`,
       priority: newPriority,
       priority_level: newPriority === "High" ? "high" : newPriority === "Medium" ? "medium" : "low",
+      description: newDescription.trim(),
       current_stage: 1,
       total_stages: 7,
       manager: "Admin",
@@ -306,6 +318,7 @@ export default function ProjectsPage() {
         code: created.code,
         priority: (created.priority || "High") as "High" | "Medium" | "Low",
         priorityLevel: (created.priority_level || "high") as "high" | "medium" | "low",
+        description: created.description || payload.description,
         currentStage: created.current_stage || 1,
         totalStages: 7,
         manager: created.manager || "Admin",
@@ -320,6 +333,7 @@ export default function ProjectsPage() {
       setNewProjectName("");
       setNewClientName("");
       setNewPriority("High");
+      setNewDescription("");
       setIsNewProjectOpen(false);
       setActiveTab("active");
       showToast(`Created new project "${newProj.name}" successfully!`);
@@ -328,6 +342,60 @@ export default function ProjectsPage() {
       showToast(err?.message || "Failed to create project");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Open Edit Modal
+  const handleOpenEditModal = (e: React.MouseEvent, proj: Project) => {
+    e.stopPropagation();
+    setEditingProjectId(proj.id);
+    setEditProjectName(proj.name);
+    setEditClientName(proj.client);
+    setEditPriority(proj.priority);
+    setEditDescription(proj.description || "");
+    setIsEditProjectOpen(true);
+  };
+
+  // Handle Save Edited Project
+  const handleSaveEditProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProjectId || !editProjectName.trim()) return;
+
+    setIsEditSubmitting(true);
+    const updatedPayload = {
+      name: editProjectName.trim(),
+      client: editClientName.trim() || "Client Name",
+      priority: editPriority,
+      priority_level: editPriority === "High" ? "high" : editPriority === "Medium" ? "medium" : "low",
+      description: editDescription.trim(),
+    };
+
+    try {
+      await apiUpdateProject(editingProjectId, updatedPayload);
+
+      const updated = projects.map((p) => {
+        if (p.id === editingProjectId) {
+          return {
+            ...p,
+            name: updatedPayload.name,
+            client: updatedPayload.client,
+            priority: updatedPayload.priority as "High" | "Medium" | "Low",
+            priorityLevel: updatedPayload.priority_level as "high" | "medium" | "low",
+            description: updatedPayload.description,
+          };
+        }
+        return p;
+      });
+
+      saveProjects(updated);
+      setIsEditProjectOpen(false);
+      setEditingProjectId(null);
+      showToast(`Project "${updatedPayload.name}" updated successfully!`);
+    } catch (err: any) {
+      console.error("Failed to update project", err);
+      showToast(err?.message || "Failed to update project");
+    } finally {
+      setIsEditSubmitting(false);
     }
   };
 
@@ -647,7 +715,7 @@ export default function ProjectsPage() {
               onClick={() => router.push(`/projects/${proj.id}`)}
               className="rounded-2xl sm:rounded-3xl bg-white border border-slate-200/80 p-4 sm:p-5 shadow-xs hover:shadow-md hover:border-slate-300 transition-all cursor-pointer group flex flex-col md:grid md:grid-cols-12 md:items-center gap-4 md:gap-0 relative overflow-visible"
             >
-              {/* Project Name & Client */}
+              {/* Project Name & Client & Description */}
               <div className="md:col-span-5 pl-1 pr-4">
                 <div className="text-sm sm:text-base font-bold text-slate-900 group-hover:text-indigo-600 transition-colors tracking-tight flex items-center gap-2">
                   <span>{proj.name}</span>
@@ -660,6 +728,11 @@ export default function ProjectsPage() {
                 <div className="text-xs text-slate-400 mt-0.5 font-medium flex items-center gap-2">
                   <span>{proj.client}</span>
                 </div>
+                {proj.description && (
+                  <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed font-normal">
+                    {proj.description}
+                  </p>
+                )}
               </div>
 
               {/* In-Place Interactive Priority Dropdown Badge */}
@@ -816,8 +889,24 @@ export default function ProjectsPage() {
                 </div>
               </div>
 
-              {/* Action Column: Archive with Confirmation Popup / Reopen */}
+              {/* Action Column: Edit Project, Archive with Confirmation Popup / Reopen */}
               <div className="md:col-span-2 flex items-center justify-end gap-2 pr-2">
+                {/* Edit Project Button */}
+                {!isSiteSupervisor() && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleOpenEditModal(e, proj)}
+                    title="Edit Project Details"
+                    aria-label="Edit Project Details"
+                    className="p-2 text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl transition-all cursor-pointer shadow-2xs group/edit"
+                  >
+                    <svg className="w-4 h-4 text-slate-600 group-hover/edit:text-indigo-600 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                      <path d="m15 5 4 4" />
+                    </svg>
+                  </button>
+                )}
+
                 {isAdmin() && (
                   !proj.isCompleted ? (
                     <button
@@ -856,7 +945,7 @@ export default function ProjectsPage() {
         )}
       </div>
 
-      {/* New Project Modal (No Target Handover Date, Clean High/Medium/Low Priority) */}
+      {/* New Project Modal (Project Name, Client Name, Priority, Description) */}
       {isNewProjectOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
@@ -925,6 +1014,19 @@ export default function ProjectsPage() {
                 </select>
               </div>
 
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Description <span className="text-slate-400 font-normal text-[11px]">(Optional)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={newDescription}
+                  onChange={(e) => setNewDescription(e.target.value)}
+                  placeholder="Enter project overview, scope notes, or site details..."
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none"
+                />
+              </div>
+
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
                 <button
                   type="button"
@@ -935,9 +1037,113 @@ export default function ProjectsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-semibold text-white bg-[#0c1033] hover:bg-[#151b54] rounded-xl shadow-xs transition-colors cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-[#0c1033] hover:bg-[#151b54] rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                 >
-                  Create Project
+                  {isSubmitting ? "Creating..." : "Create Project"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Project Modal (Project Name, Client Name, Priority, Description) */}
+      {isEditProjectOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+          onClick={() => setIsEditProjectOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-md w-full p-6 sm:p-7 space-y-5 animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Edit Project Details</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Modify project name, client, priority, or description</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditProjectOpen(false)}
+                className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditProject} className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Project Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editProjectName}
+                  onChange={(e) => setEditProjectName(e.target.value)}
+                  placeholder="e.g. Marina Horizon Villa - Smart Automation"
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Client Name
+                </label>
+                <input
+                  type="text"
+                  value={editClientName}
+                  onChange={(e) => setEditClientName(e.target.value)}
+                  placeholder="e.g. Al Reem Holdings Abu Dhabi"
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Priority <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={editPriority}
+                  onChange={(e) => setEditPriority(e.target.value as any)}
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-slate-50/50 cursor-pointer"
+                >
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Description <span className="text-slate-400 font-normal text-[11px]">(Optional)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="Enter project overview, scope notes, or site details..."
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsEditProjectOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEditSubmitting}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {isEditSubmitting ? "Saving..." : "Save Changes"}
                 </button>
               </div>
             </form>
