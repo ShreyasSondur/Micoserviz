@@ -128,11 +128,58 @@ systemctl enable microservice-backend
 systemctl restart microservice-backend
 echo -e "${GREEN}✓ microservice-backend.service active on port 8080.${NC}"
 
-# 7. Configure Dedicated Nginx Server Block (Coexists with other backends)
+# 7. Configure Dedicated Nginx Server Block (Preserving SSL if already configured)
 echo -e "\n${YELLOW}[7/8] Configuring Nginx Server Block...${NC}"
 NGINX_CONF="/etc/nginx/sites-available/microservice-backend"
+SSL_DOMAIN="13.140.172.117.sslip.io"
+CERT_PATH="/etc/letsencrypt/live/$SSL_DOMAIN/fullchain.pem"
+KEY_PATH="/etc/letsencrypt/live/$SSL_DOMAIN/privkey.pem"
 
-cat <<'EOF' > "$NGINX_CONF"
+if [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
+    echo -e "${GREEN}✓ Existing Let's Encrypt SSL certificate found for $SSL_DOMAIN. Preserving HTTPS (Port 443)...${NC}"
+    cat <<EOF > "$NGINX_CONF"
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _ $SSL_DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name _ $SSL_DOMAIN;
+
+    ssl_certificate $CERT_PATH;
+    ssl_certificate_key $KEY_PATH;
+
+    client_max_body_size 100M;
+
+    # Security Headers
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_connect_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+}
+EOF
+else
+    echo -e "${YELLOW}Notice: No existing SSL cert found. Setting up HTTP (Port 80)...${NC}"
+    cat <<'EOF' > "$NGINX_CONF"
 server {
     listen 80 default_server;
     listen [::]:80;
@@ -157,6 +204,7 @@ server {
     }
 }
 EOF
+fi
 
 # Disable default nginx site if present to avoid port 80 collision
 rm -f /etc/nginx/sites-enabled/default
@@ -181,14 +229,18 @@ echo -e "\n${GREEN}======================================================${NC}"
 echo -e "${GREEN}    🎉 MicroService ERP Backend Deployed Successfully! ${NC}"
 echo -e "${GREEN}======================================================${NC}"
 echo -e "Health Check Response: $HEALTH_STATUS"
-echo -e "\n${BLUE}API Base URL:${NC} http://$PUBLIC_IP/api/v1"
-echo -e "${BLUE}API Docs:${NC}     http://$PUBLIC_IP/docs"
-echo -e "${BLUE}Health Check:${NC} http://$PUBLIC_IP/health"
-echo -e "\n${YELLOW}Next Step for Vercel Frontend:${NC}"
-echo -e "In Vercel Project Settings -> Environment Variables, add:"
-echo -e "  NEXT_PUBLIC_API_URL=http://$PUBLIC_IP/api/v1"
-echo -e "  NEXT_PUBLIC_BACKEND_URL=http://$PUBLIC_IP"
-echo -e "\n${YELLOW}To attach a custom domain with Free SSL:${NC}"
-echo -e "  sudo apt install certbot python3-certbot-nginx -y"
-echo -e "  sudo certbot --nginx -d api.yourdomain.com"
+if [ -f "$CERT_PATH" ]; then
+    echo -e "\n${BLUE}API Base URL (HTTPS):${NC} https://$SSL_DOMAIN/api/v1"
+    echo -e "${BLUE}API Docs:${NC}             https://$SSL_DOMAIN/docs"
+    echo -e "${BLUE}Health Check:${NC}         https://$SSL_DOMAIN/health"
+    echo -e "\n${YELLOW}Frontend Vercel Environment Variables:${NC}"
+    echo -e "  NEXT_PUBLIC_API_URL=https://$SSL_DOMAIN/api/v1"
+    echo -e "  NEXT_PUBLIC_BACKEND_URL=https://$SSL_DOMAIN"
+else
+    echo -e "\n${BLUE}API Base URL:${NC} http://$PUBLIC_IP/api/v1"
+    echo -e "${BLUE}API Docs:${NC}     http://$PUBLIC_IP/docs"
+    echo -e "${BLUE}Health Check:${NC} http://$PUBLIC_IP/health"
+    echo -e "\n${YELLOW}To attach a custom domain with Free SSL:${NC}"
+    echo -e "  sudo bash setup_ssl.sh $PUBLIC_IP.sslip.io your-email@example.com"
+fi
 echo -e "======================================================\n"
