@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.config import settings
 from app.db.session import SessionLocal
@@ -17,11 +18,13 @@ from app.services.b2_storage import b2_storage
 from app.services.archiver import archive_all_daily_data
 
 async def _periodic_b2_archiver():
-    """Background task that runs daily archiving periodically (every 4 hours and on startup)."""
+    """Background task that runs daily archiving periodically in a worker thread (non-blocking)."""
+    # Delay initial check by 60 seconds so startup and early client requests are served with 0ms latency
+    await asyncio.sleep(60)
     while True:
         try:
-            logger.info("Running automated Backblaze B2 daily archiving check...")
-            archive_all_daily_data()
+            logger.info("Running automated Backblaze B2 daily archiving check in worker thread...")
+            await asyncio.to_thread(archive_all_daily_data)
             logger.info("Automated Backblaze B2 daily archiving completed.")
         except Exception as e:
             logger.warning(f"Error in periodic B2 archiving task: {e}")
@@ -84,6 +87,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Enable automatic Gzip compression for all JSON / API responses > 1KB
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # Register API routes

@@ -18,8 +18,16 @@ import { ThemeDatePicker, AdminPasswordModal } from "@/components";
 import { addActivityLog } from "@/lib/logsStore";
 
 export default function InvoicePage() {
-  const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [invoices, setInvoices] = useState<InvoiceItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredInvoices();
+    return [];
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return getStoredInvoices().length === 0;
+    }
+    return false;
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState("");
@@ -465,7 +473,7 @@ export default function InvoicePage() {
         </div>
 
         {/* Table View */}
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto table-deferred-container">
           <table className="w-full text-left min-w-[750px]">
             <thead>
               <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">

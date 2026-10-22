@@ -20,3 +20,12 @@
     transform: scale(1.1);
   }
 }
+
+/* Section styling - ensure no paint containment clips dropdowns/calendars */
+.heavy-section-deferred {
+  /* content-visibility removed to allow calendar and dropdown popovers to overflow cleanly without clipping */
+}
+
+.table-deferred-container {
+  /* Clean scroll container without paint containment */
+}

@@ -26,6 +26,7 @@ import {
   isSiteSupervisor,
 } from "@/lib/api";
 import { exportCostingToExcel } from "@/lib/exportUtils";
+import { getStoredParts, getStoredInventory } from "@/lib/inventoryStore";
 
 export default function ProjectCostingPage() {
   const params = useParams();
@@ -112,9 +113,15 @@ export default function ProjectCostingPage() {
     invoice_number: "",
   });
 
-  // Master Parts & Inventory state for dynamic allocation
-  const [masterParts, setMasterParts] = useState<BackendPartItem[]>([]);
-  const [masterInventory, setMasterInventory] = useState<BackendInventoryItem[]>([]);
+  // Master Parts & Inventory state initialized from cache for instant 0ms dropdowns
+  const [masterParts, setMasterParts] = useState<BackendPartItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredParts();
+    return [];
+  });
+  const [masterInventory, setMasterInventory] = useState<BackendInventoryItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredInventory() as any;
+    return [];
+  });
   const [isLoadingParts, setIsLoadingParts] = useState(false);
 
   // Custom Searchable Dropdown state for Part Selection

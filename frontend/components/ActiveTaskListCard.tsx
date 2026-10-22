@@ -17,12 +17,21 @@ import { apiGetProjects, BackendProjectItem } from "@/lib/api";
 type FilterTab = "all" | "assigned_to_me";
 
 export function ActiveTaskListCard() {
-  const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [users, setUsers] = useState<UserItem[]>([]);
+  const [tasks, setTasks] = useState<TaskItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredTasks();
+    return [];
+  });
+  const [users, setUsers] = useState<UserItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredUsers();
+    return [];
+  });
   const [projects, setProjects] = useState<BackendProjectItem[]>([]);
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [filterTab, setFilterTab] = useState<FilterTab>("all");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") return getStoredTasks().length === 0;
+    return false;
+  });
 
   // Add Task Modal State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);

@@ -82,8 +82,24 @@ const STORAGE_KEY = "microservice_projects_list_v3";
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [projects, setProjects] = useState<Project[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch {}
+    }
+    return [];
+  });
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw && JSON.parse(raw).length > 0) return false;
+      } catch {}
+    }
+    return true;
+  });
 
   const [activeTab, setActiveTab] = useState<"active" | "archived">("active");
   const [searchQuery, setSearchQuery] = useState("");
@@ -185,6 +201,11 @@ export default function ProjectsPage() {
           };
         });
         setProjects(mapped);
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped));
+          } catch {}
+        }
       }
     } catch (err) {
       console.warn("Backend fetch failed, checking cached state", err);

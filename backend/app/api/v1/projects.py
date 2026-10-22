@@ -583,7 +583,35 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
 
 @router.get("/{project_key}", response_model=ProjectResponse)
 def get_project_by_key(project_key: str, db: Session = Depends(get_db)):
-    p = get_project_or_create(project_key, db)
+    from sqlalchemy.orm import selectinload
+    pk = str(project_key).strip()
+    p = (
+        db.query(Project)
+        .options(
+            selectinload(Project.commercial_stages),
+            selectinload(Project.engineering_stages),
+            selectinload(Project.costing_items),
+            selectinload(Project.soa_items),
+            selectinload(Project.resource_items),
+        )
+        .filter((Project.project_key == pk) | (Project.code == pk))
+        .first()
+    )
+    if not p and pk.isdigit():
+        p = (
+            db.query(Project)
+            .options(
+                selectinload(Project.commercial_stages),
+                selectinload(Project.engineering_stages),
+                selectinload(Project.costing_items),
+                selectinload(Project.soa_items),
+                selectinload(Project.resource_items),
+            )
+            .filter(Project.id == int(pk))
+            .first()
+        )
+    if not p:
+        p = get_project_or_create(project_key, db)
 
 
     comm_res = []
@@ -883,7 +911,13 @@ def update_commercial_stage(project_key: str, stage_id: int, data: CommercialSta
     if stage.status == "completed" and data.status == "in_progress":
         raise HTTPException(status_code=400, detail="Completed stage cannot be rolled back to In progress")
 
-    if data.is_saved is not None:
+    if data.is_saved is True:
+        po_check = (data.po_number if data.po_number is not None else stage.po_number or "").strip()
+        cv_check = (data.contract_value if data.contract_value is not None else stage.contract_value or "").strip()
+        if not po_check or not cv_check:
+            raise HTTPException(status_code=400, detail="Both PO Number and Contract Value are required before saving commercial stage details")
+        stage.is_saved = True
+    elif data.is_saved is not None:
         stage.is_saved = data.is_saved
     if data.status is not None:
         stage.status = data.status

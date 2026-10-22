@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 
 interface ThemeDatePickerProps {
   value: string; // format: "YYYY-MM-DD" e.g. "2026-05-02"
@@ -10,6 +10,8 @@ interface ThemeDatePickerProps {
   disabled?: boolean;
   align?: "left" | "center" | "right";
   className?: string;
+  highlightedDates?: string[]; // Array of "YYYY-MM-DD" dates to show blue dot / highlight on
+  dropUp?: boolean; // Force drop-upwards if specified
 }
 
 const MONTH_NAMES = [
@@ -37,9 +39,49 @@ export function ThemeDatePicker({
   disabled = false,
   align,
   className = "",
+  highlightedDates = [],
+  dropUp = false,
 }: ThemeDatePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState<"down" | "up">(dropUp ? "up" : "down");
+  const [effectiveAlign, setEffectiveAlign] = useState<"left" | "center" | "right">(align || "left");
+
+  // Smart auto-positioning: detect viewport space to drop up or down and adjust horizontal alignment
+  useEffect(() => {
+    if (dropUp) {
+      setPlacement("up");
+      return;
+    }
+    if (isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      // Calendar popover is ~375px tall
+      if (spaceBelow < 380 && spaceAbove > spaceBelow) {
+        setPlacement("up");
+      } else {
+        setPlacement("down");
+      }
+
+      // Check horizontal boundary to prevent right overflow on mobile or narrow cards
+      if (!align) {
+        if (rect.left + 295 > window.innerWidth && rect.right > 295) {
+          setEffectiveAlign("right");
+        } else {
+          setEffectiveAlign("left");
+        }
+      } else {
+        setEffectiveAlign(align);
+      }
+    }
+  }, [isOpen, dropUp, align]);
+
+  // Fast O(1) lookup set for highlighted/active dates
+  const highlightedSet = useMemo(() => {
+    if (!highlightedDates || !Array.isArray(highlightedDates)) return new Set<string>();
+    return new Set(highlightedDates.map((d) => (d || "").trim()).filter(Boolean));
+  }, [highlightedDates]);
 
   // Parse initial year and month
   const parseDate = (valStr: string) => {
@@ -276,10 +318,12 @@ export function ThemeDatePicker({
       {/* Popover Calendar Modal / Dropdown */}
       {isOpen && (
         <div
-          className={`absolute top-full mt-2 z-[100] w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/90 overflow-hidden animate-in fade-in zoom-in-95 duration-150 ring-1 ring-slate-900/10 ${
-            align === "center"
+          className={`absolute z-[100] w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/90 overflow-hidden animate-in fade-in zoom-in-95 duration-150 ring-1 ring-slate-900/10 ${
+            placement === "up" ? "bottom-full mb-2" : "top-full mt-2"
+          } ${
+            effectiveAlign === "center"
               ? "left-1/2 -translate-x-1/2"
-              : align === "right"
+              : effectiveAlign === "right"
               ? "right-0"
               : "left-0"
           }`}
@@ -366,21 +410,41 @@ export function ThemeDatePicker({
             {currentMonthDays.map((day) => {
               const selected = isSelectedDate(day);
               const todayCurrent = isToday(day);
+              const mmStr = String(viewMonth + 1).padStart(2, "0");
+              const ddStr = String(day).padStart(2, "0");
+              const dateIso = `${viewYear}-${mmStr}-${ddStr}`;
+              const isHighlighted = highlightedSet.has(dateIso);
 
               return (
                 <button
                   key={`cur-${day}`}
                   type="button"
                   onClick={() => handleSelectDay(day)}
-                  className={`h-8 rounded-xl text-xs font-medium transition-all flex items-center justify-center cursor-pointer select-none ${
+                  title={
+                    isHighlighted
+                      ? `Work details recorded on ${formatDisplay(dateIso)}`
+                      : todayCurrent
+                      ? "Today"
+                      : undefined
+                  }
+                  className={`h-9 rounded-xl text-xs font-medium transition-all flex flex-col items-center justify-center cursor-pointer select-none relative group ${
                     selected
                       ? "bg-[#22c55e] text-white font-bold shadow-md shadow-emerald-500/25 scale-105"
+                      : isHighlighted
+                      ? "bg-blue-50/90 text-blue-900 font-bold border border-blue-300 shadow-2xs hover:bg-blue-100 hover:border-blue-400"
                       : todayCurrent
                       ? "border border-indigo-300 text-indigo-700 bg-indigo-50/50 font-semibold hover:bg-indigo-100"
                       : "text-slate-700 hover:bg-slate-100 hover:text-slate-900 active:scale-95"
                   }`}
                 >
-                  {day}
+                  <span className="leading-none text-xs">{day}</span>
+                  {isHighlighted && (
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full mt-0.5 transition-transform ${
+                        selected ? "bg-white" : "bg-blue-600 ring-1 ring-blue-300"
+                      }`}
+                    />
+                  )}
                 </button>
               );
             })}
@@ -398,14 +462,23 @@ export function ThemeDatePicker({
 
           {/* Fully Visible Clean Footer Bar */}
           <div className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border-t border-slate-100 text-xs">
-            <button
-              type="button"
-              onClick={handleSelectToday}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-600" />
-              <span>Today</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSelectToday}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-600" />
+                <span>Today</span>
+              </button>
+
+              {highlightedSet.size > 0 && (
+                <div className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600 ring-1 ring-blue-300" />
+                  <span>Work Recorded</span>
+                </div>
+              )}
+            </div>
 
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-slate-500 font-medium">

@@ -22,11 +22,32 @@ interface BackendProjectResponse {
 }
 
 export default function OverviewPage() {
-  const [stats, setStats] = useState({
-    totalProjects: 0,
-    inProgress: 0,
-    needsAttention: 0,
-    completed: 0,
+  const [stats, setStats] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("microservice_projects_list_v3");
+        if (raw) {
+          const data = JSON.parse(raw);
+          if (Array.isArray(data) && data.length > 0) {
+            const total = data.length;
+            const completed = data.filter((p: any) => p.isCompleted || p.is_completed).length;
+            const inProgress = total - completed;
+            const needsAttention = data.filter(
+              (p: any) =>
+                !(p.isCompleted || p.is_completed) &&
+                (p.priority?.toLowerCase() === "high" || p.priorityLevel === "high" || p.priority_level === "high")
+            ).length;
+            return { totalProjects: total, inProgress, needsAttention, completed };
+          }
+        }
+      } catch {}
+    }
+    return {
+      totalProjects: 0,
+      inProgress: 0,
+      needsAttention: 0,
+      completed: 0,
+    };
   });
 
   useEffect(() => {

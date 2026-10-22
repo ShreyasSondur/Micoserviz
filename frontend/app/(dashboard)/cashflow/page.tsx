@@ -28,10 +28,24 @@ import { fetchInvoicesFromBackend, getStoredInvoices, InvoiceItem as Invoice } f
 import { addActivityLog } from "@/lib/logsStore";
 
 export default function CashFlowPage() {
-  const [pettyCash, setPettyCash] = useState<PettyCashTransaction[]>([]);
-  const [creditLoans, setCreditLoans] = useState<CreditLoanItem[]>([]);
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [pettyCash, setPettyCash] = useState<PettyCashTransaction[]>(() => {
+    if (typeof window !== "undefined") return getStoredPettyCash();
+    return [];
+  });
+  const [creditLoans, setCreditLoans] = useState<CreditLoanItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredCreditLoans();
+    return [];
+  });
+  const [invoices, setInvoices] = useState<Invoice[]>(() => {
+    if (typeof window !== "undefined") return getStoredInvoices();
+    return [];
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return getStoredPettyCash().length === 0 && getStoredCreditLoans().length === 0;
+    }
+    return false;
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
 
@@ -570,7 +584,7 @@ export default function CashFlowPage() {
           </div>
 
           {/* Clean Table */}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto table-deferred-container">
             <table className="w-full text-left min-w-[500px]">
               <thead>
                 <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
@@ -760,7 +774,7 @@ export default function CashFlowPage() {
           </div>
 
           {/* Clean Table: Identical layout to Petty Cash */}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto table-deferred-container">
             <table className="w-full text-left min-w-[500px]">
               <thead>
                 <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">

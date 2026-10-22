@@ -134,8 +134,12 @@ export default function ProjectSOAPage() {
               contractValue: parseFloat(rawVal) || 0,
             };
           });
-          parsedStages.sort((a, b) => a.stageNumber - b.stageNumber);
-          setStages(parsedStages);
+          // Strictly deduplicate by stageNumber so Stage 1 is never duplicated
+          const uniqueStages = Array.from(
+            new Map(parsedStages.map((s) => [s.stageNumber, s])).values()
+          );
+          uniqueStages.sort((a, b) => a.stageNumber - b.stageNumber);
+          setStages(uniqueStages);
         } else {
           // fallback single stage
           const numBudget = parseFloat(String(data.budget || "0").replace(/[^0-9.-]/g, "")) || 0;
@@ -638,9 +642,9 @@ export default function ProjectSOAPage() {
                 <div>
                   <h3 className="text-base sm:text-lg font-black tracking-tight flex items-center gap-2">
                     <span>Stage {stage.stageNumber}</span>
-                    {stage.poNumber && (
+                    {stage.poNumber && stage.poNumber !== "null" && stage.poNumber.trim() && (
                       <span className="px-2 py-0.5 rounded-md text-xs font-mono font-normal bg-white/10 text-slate-200">
-                        PO: {stage.poNumber}
+                        PO: {stage.poNumber.trim()}
                       </span>
                     )}
                   </h3>
@@ -866,7 +870,7 @@ export default function ProjectSOAPage() {
                 >
                   {stages.map((st) => (
                     <option key={st.stageNumber} value={st.stageNumber}>
-                      Stage {st.stageNumber} – Contract Value: {st.contractValue.toLocaleString(undefined, { minimumFractionDigits: 2 })} AED {st.poNumber ? `(PO: ${st.poNumber})` : ""}
+                      Stage {st.stageNumber} – Contract Value: {st.contractValue.toLocaleString(undefined, { minimumFractionDigits: 2 })} AED{st.poNumber && st.poNumber !== "null" && st.poNumber.trim() ? ` (PO: ${st.poNumber.trim()})` : ""}
                     </option>
                   ))}
                 </select>

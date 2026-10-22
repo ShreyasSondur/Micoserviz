@@ -58,6 +58,7 @@ import {
   fetchActivityLogsFromBackend,
   getStoredSystemLogs,
 } from "@/lib/logsStore";
+import { getStoredParts, getStoredInventory } from "@/lib/inventoryStore";
 
 interface DocumentItem {
   id: string;
@@ -446,9 +447,15 @@ export default function ProjectDetailsPage() {
   // Section 5 (SOA): Statement of Accounts State
   const [soaItems, setSoaItems] = useState<BackendSOAItem[]>([]);
 
-  // Master Parts & Inventory state for dynamic allocation & selection
-  const [masterParts, setMasterParts] = useState<BackendPartItem[]>([]);
-  const [masterInventory, setMasterInventory] = useState<BackendInventoryItem[]>([]);
+  // Master Parts & Inventory state initialized from cache for instant 0ms rendering
+  const [masterParts, setMasterParts] = useState<BackendPartItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredParts();
+    return [];
+  });
+  const [masterInventory, setMasterInventory] = useState<BackendInventoryItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredInventory() as any;
+    return [];
+  });
 
   // Procurement Add Item Modal State
   const [isAddProcurementOpen, setIsAddProcurementOpen] = useState(false);
@@ -512,12 +519,10 @@ export default function ProjectDetailsPage() {
       loadPartsAndInventory();
     };
 
-    window.addEventListener("focus", handleRefresh);
     window.addEventListener("inventory_store_update", handleRefresh);
     window.addEventListener("parts_store_update", handleRefresh);
 
     return () => {
-      window.removeEventListener("focus", handleRefresh);
       window.removeEventListener("inventory_store_update", handleRefresh);
       window.removeEventListener("parts_store_update", handleRefresh);
     };
@@ -923,7 +928,32 @@ export default function ProjectDetailsPage() {
   const [resourceItems, setResourceItems] = useState<BackendResourceItem[]>([]);
   const [manpowerList, setManpowerList] = useState<BackendManpower[]>([]);
   const [selectedResourceDate, setSelectedResourceDate] = useState<string>(getTodayDateStr());
+  const [resourceActiveDates, setResourceActiveDates] = useState<string[]>([]);
   const [isLoadingResources, setIsLoadingResources] = useState<boolean>(false);
+
+  // Load all unique dates that have resources allocated for this project
+  const loadResourceActiveDates = async () => {
+    if (!rawId) return;
+    try {
+      const allItems = await apiGetProjectResources(rawId);
+      if (Array.isArray(allItems)) {
+        const dSet = new Set<string>();
+        for (const item of allItems) {
+          const dStr = (item.date || "").trim();
+          if (dStr) dSet.add(dStr);
+        }
+        setResourceActiveDates(Array.from(dSet));
+      }
+    } catch (err) {
+      console.warn("Could not load resource active dates", err);
+    }
+  };
+
+  useEffect(() => {
+    if (rawId) {
+      loadResourceActiveDates();
+    }
+  }, [rawId]);
 
   // Add Resource Member Modal State (Single Select)
   const [isAddResourceOpen, setIsAddResourceOpen] = useState(false);
@@ -1036,6 +1066,7 @@ export default function ProjectDetailsPage() {
       });
 
       setResourceItems((prev) => [...prev, created]);
+      setResourceActiveDates((prev) => Array.from(new Set([...prev, targetDate])));
       setIsAddResourceOpen(false);
       setSelectedWorkerName("");
       setSelectedWorkerType("Internal");
@@ -1068,6 +1099,7 @@ export default function ProjectDetailsPage() {
         try {
           await apiDeleteProjectResource(rawId, itemId);
           setResourceItems((prev) => prev.filter((r) => r.id !== itemId));
+          loadResourceActiveDates();
           showToast(`Removed member ${name}`);
           addActivityLog({
             projectName: projectInfo.name,
@@ -1104,11 +1136,36 @@ export default function ProjectDetailsPage() {
   // Section 6: Site Execution State & Feed
   const [selectedExecutionDate, setSelectedExecutionDate] = useState<string>(getTodayDateStr());
   const [siteExecutionLogs, setSiteExecutionLogs] = useState<BackendSiteExecutionLog[]>([]);
+  const [executionActiveDates, setExecutionActiveDates] = useState<string[]>([]);
   const [isLoadingSiteExecution, setIsLoadingSiteExecution] = useState<boolean>(false);
   const [verifiedProgressPercentage, setVerifiedProgressPercentage] = useState<number>(0);
   const [editingProgressValue, setEditingProgressValue] = useState<number>(0);
   const [isUpdatingProgress, setIsUpdatingProgress] = useState<boolean>(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+
+  // Load all unique dates that have site execution logs recorded for this project
+  const loadExecutionActiveDates = async () => {
+    if (!rawId) return;
+    try {
+      const allLogs = await apiGetSiteExecutionLogs(rawId);
+      if (Array.isArray(allLogs)) {
+        const dSet = new Set<string>();
+        for (const log of allLogs) {
+          const dStr = (log.date || "").trim();
+          if (dStr) dSet.add(dStr);
+        }
+        setExecutionActiveDates(Array.from(dSet));
+      }
+    } catch (err) {
+      console.warn("Could not load execution active dates", err);
+    }
+  };
+
+  useEffect(() => {
+    if (rawId) {
+      loadExecutionActiveDates();
+    }
+  }, [rawId]);
 
   // Export Site Execution Daily Progress to PDF with Photos
   const handleExportSiteExecutionPdf = async () => {
@@ -1248,6 +1305,8 @@ export default function ProjectDetailsPage() {
       });
 
       setSiteExecutionLogs((prev) => [created, ...prev]);
+      const logDate = (created.date || selectedExecutionDate || getTodayDateStr()).trim();
+      setExecutionActiveDates((prev) => Array.from(new Set([...prev, logDate])));
       setIsAddExecutionOpen(false);
       setExecutionDescription("");
       setExecutionPhaseName("");
@@ -1341,6 +1400,7 @@ export default function ProjectDetailsPage() {
         try {
           await apiDeleteSiteExecutionLog(rawId, log.id);
           setSiteExecutionLogs((prev) => prev.filter((l) => l.id !== log.id));
+          loadExecutionActiveDates();
           showToast(`Deleted site log #${log.id}`);
           addActivityLog({
             projectName: projectInfo.name,
@@ -1401,7 +1461,12 @@ export default function ProjectDetailsPage() {
     const received = soaItems.reduce((acc, it) => acc + (Number(it.received) || 0), 0);
     const balance = Math.max(0, totalContract - received);
 
-    const stageBreakdowns = commercialBlocks.map((b) => {
+    // Deduplicate commercial stages by stageNumber so Stage 1 or subsequent stages never duplicate
+    const dedupBlocks = Array.from(
+      new Map(commercialBlocks.map((b) => [b.stageNumber, b])).values()
+    ).sort((a, b) => a.stageNumber - b.stageNumber);
+
+    const stageBreakdowns = dedupBlocks.map((b) => {
       const stNum = b.stageNumber;
       const stageContract = parseFloat((b.contractValue || "").replace(/[^0-9.-]/g, "")) || 0;
       const stageRec = soaItems
@@ -1480,12 +1545,22 @@ export default function ProjectDetailsPage() {
     const fetchProjectAndStages = async () => {
       setIsLoadingCommercial(true);
       try {
-        const resProject = await fetch(`${API_BASE_URL}/projects/${rawId}`);
-        if (resProject.ok) {
-          const p = await resProject.json();
-          const verifiedPct = (p.verified_progress_percentage !== undefined && p.verified_progress_percentage !== null)
-            ? Number(p.verified_progress_percentage)
-            : 0;
+        // Parallelized fetch: loads project details and procurement simultaneously
+        const [projectRes, procData] = await Promise.all([
+          fetch(`${API_BASE_URL}/projects/${rawId}`).then((r) => (r.ok ? r.json() : null)),
+          apiGetProjectProcurement(rawId).catch(() => []),
+        ]);
+
+        if (Array.isArray(procData)) {
+          setProcurementItems(procData.map((pr: any, idx: number) => mapBackendToProcurementItem(pr, idx)));
+        }
+
+        if (projectRes) {
+          const p = projectRes;
+          const verifiedPct =
+            p.verified_progress_percentage !== undefined && p.verified_progress_percentage !== null
+              ? Number(p.verified_progress_percentage)
+              : 0;
 
           setProjectInfo({
             name: p.name || "Project",
@@ -1518,21 +1593,19 @@ export default function ProjectDetailsPage() {
           if (p.resource_status) setResourceStatus(p.resource_status);
           if (p.site_execution_status) setSiteExecutionStatus(p.site_execution_status);
 
-          // Sync resource items from project or dedicated endpoint
+          // Sync resource items directly from eager-loaded project response
           if (Array.isArray(p.resource_items) && p.resource_items.length > 0) {
             setResourceItems(p.resource_items);
           } else {
-            try {
-              const resList = await apiGetProjectResources(rawId);
-              if (Array.isArray(resList)) {
-                setResourceItems(resList);
-              }
-            } catch { }
+            apiGetProjectResources(rawId).then((resList) => {
+              if (Array.isArray(resList) && resList.length > 0) setResourceItems(resList);
+            }).catch(() => {});
           }
 
+          // Commercial Approval stages (direct from project payload)
           let commMapped: CommercialBlock[] = [];
           if (Array.isArray(p.commercial_stages) && p.commercial_stages.length > 0) {
-            commMapped = p.commercial_stages.map((item: any) => ({
+            const rawMapped = p.commercial_stages.map((item: any) => ({
               id: String(item.id),
               stageNumber: item.stage_number || 1,
               status: (item.status as "in_progress" | "completed") || "in_progress",
@@ -1542,28 +1615,17 @@ export default function ProjectDetailsPage() {
               isSaved: Boolean(item.is_saved),
               documents: Array.isArray(item.documents) ? item.documents : [],
             }));
-            setCommercialBlocks(commMapped);
-          } else {
-            // fallback fetch commercial stages
-            const resStages = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial`);
-            if (resStages.ok) {
-              const stages = await resStages.json();
-              if (Array.isArray(stages) && stages.length > 0) {
-                commMapped = stages.map((item: any) => ({
-                  id: String(item.id),
-                  stageNumber: item.stage_number || 1,
-                  status: (item.status as "in_progress" | "completed") || "in_progress",
-                  poNumber: item.po_number || "",
-                  poDate: item.po_date || "",
-                  contractValue: item.contract_value || "",
-                  isSaved: Boolean(item.is_saved),
-                  documents: Array.isArray(item.documents) ? item.documents : [],
-                }));
-                setCommercialBlocks(commMapped);
+            const dedupMap = new Map<number, CommercialBlock>();
+            for (const b of rawMapped) {
+              if (!dedupMap.has(b.stageNumber)) {
+                dedupMap.set(b.stageNumber, b);
               }
             }
+            commMapped = Array.from(dedupMap.values()).sort((a, b) => a.stageNumber - b.stageNumber);
+            setCommercialBlocks(commMapped);
           }
 
+          // Engineering stages (direct from project payload)
           let engMapped: EngineeringBlock[] = [];
           if (Array.isArray(p.engineering_stages) && p.engineering_stages.length > 0) {
             engMapped = p.engineering_stages.map((item: any) => ({
@@ -1572,25 +1634,13 @@ export default function ProjectDetailsPage() {
               status: (item.status as "in_progress" | "completed") || "in_progress",
               documents: Array.isArray(item.documents) ? item.documents : [],
             }));
-          } else {
-            try {
-              const resEng = await fetch(`${API_BASE_URL}/projects/${rawId}/engineering`);
-              if (resEng.ok) {
-                const engStages = await resEng.json();
-                if (Array.isArray(engStages) && engStages.length > 0) {
-                  engMapped = engStages.map((item: any) => ({
-                    id: String(item.id),
-                    stageNumber: item.stage_number || 1,
-                    status: (item.status as "in_progress" | "completed") || "in_progress",
-                    documents: Array.isArray(item.documents) ? item.documents : [],
-                  }));
-                }
-              }
-            } catch { }
           }
 
           // Ensure 1-to-1 sync: each commercial stage has an engineering stage card
-          const currentCommList = commMapped.length > 0 ? commMapped : [{ id: "c1", stageNumber: 1, status: "in_progress", poNumber: "", poDate: "", contractValue: "", isSaved: false, documents: [] }];
+          const currentCommList =
+            commMapped.length > 0
+              ? commMapped
+              : [{ id: "c1", stageNumber: 1, status: "in_progress" as const, poNumber: "", poDate: "", contractValue: "", isSaved: false, documents: [] }];
           for (const c of currentCommList) {
             if (!engMapped.some((e) => e.stageNumber === c.stageNumber)) {
               engMapped.push({
@@ -1604,49 +1654,32 @@ export default function ProjectDetailsPage() {
           engMapped.sort((a, b) => a.stageNumber - b.stageNumber);
           setEngineeringBlocks(engMapped);
 
-          // Sync Budget & Costing (financial estimations only)
-          try {
-            const costingData = await apiGetProjectCosting(rawId);
-            if (Array.isArray(costingData) && costingData.length > 0) {
-              const totalPurchase = costingData.reduce((acc, c) => acc + (c.purchase_total || 0), 0);
-              const totalSelling = costingData.reduce((acc, c) => acc + (c.selling_total || 0), 0);
-              const totalProfit = totalSelling - totalPurchase;
-              let profitMargin = "25.0";
-              if (totalPurchase > 0) {
-                profitMargin = ((totalProfit / totalPurchase) * 100).toFixed(1);
-              } else if (costingData.length > 0) {
-                const sumMargins = costingData.reduce((acc, c) => acc + (Number(c.margin) || 0), 0);
-                profitMargin = (sumMargins / costingData.length).toFixed(1);
-              }
-
-              setInternalCosting(totalPurchase.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-              setMargin(profitMargin);
-              setCostingItemsList(costingData);
-            } else {
-              setCostingItemsList([]);
+          // Sync Budget & Costing directly from eager-loaded project payload
+          const costingData = Array.isArray(p.costing_items) && p.costing_items.length > 0
+            ? p.costing_items
+            : [];
+          if (costingData.length > 0) {
+            const totalPurchase = costingData.reduce((acc: number, c: any) => acc + (c.purchase_total || 0), 0);
+            const totalSelling = costingData.reduce((acc: number, c: any) => acc + (c.selling_total || 0), 0);
+            const totalProfit = totalSelling - totalPurchase;
+            let profitMargin = "25.0";
+            if (totalPurchase > 0) {
+              profitMargin = ((totalProfit / totalPurchase) * 100).toFixed(1);
+            } else if (costingData.length > 0) {
+              const sumMargins = costingData.reduce((acc: number, c: any) => acc + (Number(c.margin) || 0), 0);
+              profitMargin = (sumMargins / costingData.length).toFixed(1);
             }
-          } catch (costErr) {
-            console.warn("Could not sync costing sheet to project page", costErr);
+
+            setInternalCosting(totalPurchase.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+            setMargin(profitMargin);
+            setCostingItemsList(costingData);
+          } else {
+            setCostingItemsList([]);
           }
 
-          // Dedicated Procurement line items (strictly decoupled from Costing)
-          try {
-            const procData = await apiGetProjectProcurement(rawId);
-            if (Array.isArray(procData)) {
-              setProcurementItems(procData.map((p, idx) => mapBackendToProcurementItem(p, idx)));
-            }
-          } catch (procErr) {
-            console.warn("Could not sync procurement items to project page", procErr);
-          }
-
-          // Automatically sync Statement of Accounts (SOA) line items
-          try {
-            const soaData = await apiGetProjectSOA(rawId);
-            if (Array.isArray(soaData)) {
-              setSoaItems(soaData);
-            }
-          } catch (soaErr) {
-            console.warn("Could not sync SOA items to project page", soaErr);
+          // Sync SOA items directly from eager-loaded project payload
+          if (Array.isArray(p.soa_items)) {
+            setSoaItems(p.soa_items);
           }
         }
       } catch (err) {
@@ -1992,15 +2025,23 @@ export default function ProjectDetailsPage() {
     const targetBlock = commercialBlocks.find((b) => b.id === blockId);
     if (!targetBlock) return;
 
+    const poTrim = (targetBlock.poNumber || "").trim();
+    const cvTrim = (targetBlock.contractValue || "").trim();
+
+    if (!poTrim || !cvTrim) {
+      showToast("Please fill in both PO Number and Contract Value before saving.", "error");
+      return;
+    }
+
     try {
       const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           is_saved: true,
-          po_number: targetBlock.poNumber || "",
+          po_number: poTrim,
           po_date: targetBlock.poDate || "",
-          contract_value: targetBlock.contractValue || "",
+          contract_value: cvTrim,
         }),
       });
 
@@ -2968,88 +3009,113 @@ export default function ProjectDetailsPage() {
                       </div>
 
                       {/* Inputs: PO Number, PO Date, Contract Value (in AED), SAVE button */}
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
-                        <div className="sm:col-span-3">
-                          <label className="text-xs font-semibold text-slate-700 block mb-1">
-                            PO Number {block.isSaved && <span className="text-[10px] text-slate-400">(Locked)</span>}
-                          </label>
-                          <input
-                            type="text"
-                            value={block.poNumber}
-                            disabled={block.isSaved}
-                            onChange={(e) => handleUpdateCommercialField(block.id, "poNumber", e.target.value)}
-                            placeholder="e.g. PO-101"
-                            className="w-full px-3.5 py-2 text-xs sm:text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-800 disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors"
-                          />
-                        </div>
+                      {(() => {
+                        const isBlockSavable = Boolean(
+                          block.poNumber &&
+                          block.poNumber.trim().length > 0 &&
+                          block.contractValue &&
+                          block.contractValue.trim().length > 0
+                        );
 
-                        <div className="sm:col-span-3">
-                          <ThemeDatePicker
-                            label="PO Date"
-                            value={block.poDate}
-                            disabled={block.isSaved}
-                            onChange={(val) => handleUpdateCommercialField(block.id, "poDate", val)}
-                            placeholder="Select PO date"
-                          />
-                        </div>
+                        return (
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
+                            <div className="sm:col-span-3">
+                              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                                PO Number <span className="text-rose-500">*</span> {block.isSaved && <span className="text-[10px] text-slate-400">(Locked)</span>}
+                              </label>
+                              <input
+                                type="text"
+                                value={block.poNumber}
+                                disabled={block.isSaved}
+                                onChange={(e) => handleUpdateCommercialField(block.id, "poNumber", e.target.value)}
+                                placeholder="e.g. PO-101"
+                                className="w-full px-3.5 py-2 text-xs sm:text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-800 disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors"
+                              />
+                            </div>
 
-                        <div className="sm:col-span-4">
-                          <label className="text-xs font-semibold text-slate-700 block mb-1">
-                            Contract Value (in AED) {block.isSaved && <span className="text-[10px] text-slate-400">(Locked)</span>}
-                          </label>
-                          <div className="relative">
-                            <input
-                              type="text"
-                              value={block.contractValue}
-                              disabled={block.isSaved}
-                              onChange={(e) => handleUpdateCommercialField(block.id, "contractValue", e.target.value)}
-                              placeholder="e.g. 185,000"
-                              className="w-full px-3.5 py-2 pr-12 text-xs sm:text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-800 disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors"
-                            />
-                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
-                              AED
-                            </span>
-                          </div>
-                        </div>
+                            <div className="sm:col-span-3">
+                              <ThemeDatePicker
+                                label="PO Date"
+                                value={block.poDate}
+                                disabled={block.isSaved}
+                                onChange={(val) => handleUpdateCommercialField(block.id, "poDate", val)}
+                                placeholder="Select PO date"
+                              />
+                            </div>
 
-                        <div className="sm:col-span-2">
-                          {block.isSaved ? (
-                            <div className="flex items-center gap-1.5 w-full">
-                              <div
-                                title="Details completely saved and locked"
-                                className="flex-1 py-2 px-2 text-xs font-bold text-emerald-700 bg-emerald-100 border border-emerald-300 rounded-xl flex items-center justify-center gap-1 cursor-default select-none shadow-2xs"
-                              >
-                                <svg className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                  <polyline points="20 6 9 17 4 12" />
-                                </svg>
-                                <span>SAVED</span>
+                            <div className="sm:col-span-4">
+                              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                                Contract Value (in AED) <span className="text-rose-500">*</span> {block.isSaved && <span className="text-[10px] text-slate-400">(Locked)</span>}
+                              </label>
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  value={block.contractValue}
+                                  disabled={block.isSaved}
+                                  onChange={(e) => handleUpdateCommercialField(block.id, "contractValue", e.target.value)}
+                                  placeholder="e.g. 185,000"
+                                  className="w-full px-3.5 py-2 pr-12 text-xs sm:text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-800 disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors"
+                                />
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                                  AED
+                                </span>
                               </div>
-                              {isAdmin() && (
+                            </div>
+
+                            <div className="sm:col-span-2">
+                              {block.isSaved ? (
+                                <div className="flex items-center gap-1.5 w-full">
+                                  <div
+                                    title="Details completely saved and locked"
+                                    className="flex-1 py-2 px-2 text-xs font-bold text-emerald-700 bg-emerald-100 border border-emerald-300 rounded-xl flex items-center justify-center gap-1 cursor-default select-none shadow-2xs"
+                                  >
+                                    <svg className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                    <span>SAVED</span>
+                                  </div>
+                                  {isAdmin() && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnlockCommercialBlock(block.id, block.stageNumber)}
+                                      className="py-2 px-2.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl shadow-2xs transition-colors cursor-pointer flex items-center justify-center gap-1 flex-shrink-0"
+                                      title="Authorize with Admin Password to edit locked stage details"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-indigo-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                      </svg>
+                                      <span>Edit</span>
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
                                 <button
                                   type="button"
-                                  onClick={() => handleUnlockCommercialBlock(block.id, block.stageNumber)}
-                                  className="py-2 px-2.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl shadow-2xs transition-colors cursor-pointer flex items-center justify-center gap-1 flex-shrink-0"
-                                  title="Authorize with Admin Password to edit locked stage details"
+                                  disabled={!isBlockSavable}
+                                  onClick={() => {
+                                    if (isBlockSavable) {
+                                      handleSaveCommercialBlock(block.id);
+                                    }
+                                  }}
+                                  title={
+                                    isBlockSavable
+                                      ? "Save and lock stage details"
+                                      : "Please fill in both PO Number and Contract Value before saving"
+                                  }
+                                  className={`w-full py-2 px-4 text-xs font-bold rounded-xl shadow-xs transition-all ${
+                                    isBlockSavable
+                                      ? "text-white bg-[#22c55e] hover:bg-emerald-600 cursor-pointer active:scale-98"
+                                      : "text-slate-400 bg-slate-100 border border-slate-200/80 cursor-not-allowed opacity-60"
+                                  }`}
                                 >
-                                  <svg className="w-3.5 h-3.5 text-indigo-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                                  </svg>
-                                  <span>Edit</span>
+                                  SAVE
                                 </button>
                               )}
                             </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleSaveCommercialBlock(block.id)}
-                              className="w-full py-2 px-4 text-xs font-bold text-white bg-[#22c55e] hover:bg-emerald-600 rounded-xl shadow-xs transition-colors cursor-pointer active:scale-98"
-                            >
-                              SAVE
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Project Documents Sub-section for this Stage */}
                       <div className="space-y-3 pt-2">
@@ -3581,7 +3647,7 @@ export default function ProjectDetailsPage() {
           User Requested Columns:
           SN | Vendor | Product | Brand | Part | Quantity | Invoice Number | Status (Added, Partially Added, Yet To Order, Yet To Deliver)
           ========================================================================= */}
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-xs transition-all">
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-xs transition-all">
             <div
               onClick={() => toggleSection("procurement")}
               className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-[#0c1033] via-[#121748] to-[#1a2063] text-white cursor-pointer select-none hover:from-[#111645] hover:to-[#222a7d] transition-all"
@@ -3969,8 +4035,8 @@ export default function ProjectDetailsPage() {
                   </div>
                 </div>
 
-                {/* Stage-by-Stage Commercial Breakdown Cards */}
-                {soaSummary.stageBreakdowns.length > 0 && (
+                {/* Stage-by-Stage Commercial Breakdown Cards - Only displayed when multiple stages exist to prevent duplicating Stage 1 on single-stage projects */}
+                {soaSummary.stageBreakdowns.length > 1 && (
                   <div className="pt-3 border-t border-slate-100">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2.5">
                       Stage-by-Stage Commercial Breakdown
@@ -3985,9 +4051,9 @@ export default function ProjectDetailsPage() {
                             <span className="font-extrabold text-slate-900">
                               Stage {st.stageNumber}
                             </span>
-                            {st.poNumber && (
+                            {st.poNumber && st.poNumber !== "null" && st.poNumber.trim() && (
                               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-700">
-                                {st.poNumber}
+                                {st.poNumber.trim()}
                               </span>
                             )}
                           </div>
@@ -4053,7 +4119,7 @@ export default function ProjectDetailsPage() {
         </div>
 
         {openSections.resource && (
-          <div className="p-6 space-y-6">
+          <div className="p-6 space-y-6 min-h-[460px]">
             {/* Top Row: Section Status Controls */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div className="flex flex-wrap items-center gap-2">
@@ -4114,6 +4180,7 @@ export default function ProjectDetailsPage() {
                       if (val) setSelectedResourceDate(val);
                     }}
                     placeholder="Select Date"
+                    highlightedDates={resourceActiveDates}
                   />
                 </div>
 
@@ -4332,7 +4399,7 @@ export default function ProjectDetailsPage() {
         </div>
 
         {openSections.siteExecution && (
-          <div className="p-6 space-y-6">
+          <div className="p-6 space-y-6 min-h-[460px]">
             {/* Top Row: Section Status Controls & Report Count */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div className="flex flex-wrap items-center gap-2">
@@ -4525,6 +4592,7 @@ export default function ProjectDetailsPage() {
                         if (val) setSelectedExecutionDate(val);
                       }}
                       placeholder="Select Date"
+                      highlightedDates={executionActiveDates}
                     />
                   </div>
 
@@ -6019,6 +6087,7 @@ export default function ProjectDetailsPage() {
                     if (val) setSelectedResourceDate(val);
                   }}
                   placeholder="Select Date"
+                  highlightedDates={resourceActiveDates}
                 />
               </div>
 

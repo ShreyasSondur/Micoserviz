@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import * as XLSX from "xlsx";
 import { getUserRole, isAdmin, apiGetManpowerAttendance } from "@/lib/api";
 import { AdminPasswordModal, ThemeDatePicker } from "@/components";
 import {
@@ -31,9 +30,15 @@ export default function ManpowerPage() {
   const [activeTab, setActiveTab] = useState<ViewTab>("attendance");
 
   // Personnel Directory State
-  const [personnel, setPersonnel] = useState<ManpowerItem[]>([]);
+  const [personnel, setPersonnel] = useState<ManpowerItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredManpower();
+    return [];
+  });
   const [metrics, setMetrics] = useState<BackendManpowerMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") return getStoredManpower().length === 0;
+    return false;
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState("");
@@ -315,11 +320,13 @@ export default function ManpowerPage() {
   }, [displayedAttendanceWorkers, getWorkerStats]);
 
   // Export Attendance to Excel (.xlsx)
-  const handleExportAttendanceExcel = () => {
+  const handleExportAttendanceExcel = async () => {
     if (displayedAttendanceWorkers.length === 0) {
       showToast("No manpower records to export.");
       return;
     }
+
+    const XLSX = await import("xlsx");
 
     const rows = displayedAttendanceWorkers.map((w) => {
       const { totalDays, totalHours } = getWorkerStats(w.name);

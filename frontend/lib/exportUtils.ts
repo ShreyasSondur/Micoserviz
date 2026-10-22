@@ -1,5 +1,3 @@
-import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
 import { BackendCostingItem, BackendResourceItem, BackendSiteExecutionLog, BackendSOAItem } from "@/lib/api";
 
 /**
@@ -106,13 +104,14 @@ const getImageDataUrl = async (url: string): Promise<{ dataUrl: string; width: n
 /**
  * 1. Export Resource Planning allocation for a specific date to an Excel (.xlsx) file
  */
-export const exportResourcesToExcel = (params: {
+export const exportResourcesToExcel = async (params: {
   projectName: string;
   projectKey: string;
   dateStr: string;
   formattedDateLabel: string;
   items: BackendResourceItem[];
 }) => {
+  const XLSX = await import("xlsx");
   const { projectName, projectKey, dateStr, formattedDateLabel, items } = params;
 
   const totalMembers = items.length;
@@ -174,7 +173,7 @@ export const exportResourcesToExcel = (params: {
 /**
  * Export Project Budget & Costing Sheet (BOM, Purchase & Selling Margins) to an Excel (.xlsx) file
  */
-export const exportCostingToExcel = (params: {
+export const exportCostingToExcel = async (params: {
   projectName: string;
   projectKey: string;
   client?: string;
@@ -187,6 +186,7 @@ export const exportCostingToExcel = (params: {
     profitMarginPct?: number;
   };
 }) => {
+  const XLSX = await import("xlsx");
   const { projectName, projectKey, client, poNumber, items, totals } = params;
 
   const totalPurchase =
@@ -292,7 +292,7 @@ export const exportCostingToExcel = (params: {
 /**
  * Export Statement of Accounts (SOA) transactions to an Excel (.xlsx) file
  */
-export const exportSOAToExcel = (params: {
+export const exportSOAToExcel = async (params: {
   projectName: string;
   projectKey: string;
   client?: string;
@@ -305,6 +305,7 @@ export const exportSOAToExcel = (params: {
     balance?: number;
   };
 }) => {
+  const XLSX = await import("xlsx");
   const { projectName, projectKey, client, poNumber, budget, items, summary } = params;
 
   const totalContract =
@@ -412,6 +413,7 @@ export const exportSiteExecutionToPdf = async (params: {
 }) => {
   const { projectName, projectKey, dateStr, formattedDateLabel, verifiedMilestone, logs } = params;
 
+  const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({
     orientation: "portrait",
     unit: "mm",
@@ -724,6 +726,7 @@ export const exportProjectDossierToPdf = async (params: ProjectDossierParams) =>
     siteExecutionLogs,
   } = params;
 
+  const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({
     orientation: "portrait",
     unit: "mm",
@@ -1461,7 +1464,7 @@ export const exportProjectDossierToPdf = async (params: ProjectDossierParams) =>
 /**
  * 4. Generates a valid, beautifully formatted PDF for project documents & technical drawings proof
  */
-export const generateDocumentProofPdf = (params: {
+export const generateDocumentProofPdf = async (params: {
   projectName: string;
   projectCode: string;
   docName: string;
@@ -1471,6 +1474,7 @@ export const generateDocumentProofPdf = (params: {
   status?: string;
 }) => {
   const { projectName, projectCode, docName, stageName, date, size, status } = params;
+  const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({
     orientation: "portrait",
     unit: "mm",
@@ -1550,7 +1554,7 @@ export const generateDocumentProofPdf = (params: {
 /**
  * 5. Generates a valid, beautifully formatted PDF receipt for Statement of Accounts (SOA) transactions
  */
-export const generateSOAReceiptPdf = (params: {
+export const generateSOAReceiptPdf = async (params: {
   projectName: string;
   projectCode: string;
   stageNumber?: number;
@@ -1563,6 +1567,7 @@ export const generateSOAReceiptPdf = (params: {
   remarks?: string;
 }) => {
   const { projectName, projectCode, stageNumber, docNo, docType, amount, mode, date, poNo, remarks } = params;
+  const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({
     orientation: "portrait",
     unit: "mm",

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "@/components/Sidebar";
-import { getStoredToken, clearStoredToken, apiGetMe } from "@/lib/api";
+import { getStoredToken, getStoredUser, clearStoredToken, apiGetMe } from "@/lib/api";
 
 export default function DashboardLayout({
   children,
@@ -12,83 +12,81 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authorized, setAuthorized] = useState<boolean | null>(() => {
+  const [authorized, setAuthorized] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       return !!getStoredToken();
     }
-    return null;
+    return true; // Default to true on initial render to prevent layout flash; validated in useEffect
   });
 
+  // Fast synchronous route guard for Site Supervisor using stored user
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const token = getStoredToken();
     if (!token) {
       setAuthorized(false);
       window.location.replace("/login");
       return;
     }
+    setAuthorized(true);
+
+    const user = getStoredUser();
+    const role = user?.role || "";
+    if (role === "Site Supervisor" || role === "SITE_SUPERVISOR") {
+      const isAllowed =
+        pathname === "/" ||
+        pathname === "/overview" ||
+        pathname.startsWith("/projects");
+      if (!isAllowed) {
+        router.replace("/overview");
+      }
+    }
+  }, [pathname, router]);
+
+  // Background token verification once per session mount (does NOT block UI or re-trigger on route navigation)
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) return;
 
     let isMounted = true;
-    const timeout = setTimeout(() => {
-      if (isMounted) {
-        // Fallback: if backend check takes too long, grant access if user data exists or token is present
-        console.warn("Session verification timed out, continuing with session");
-        setAuthorized(true);
-      }
-    }, 2500);
-
-    // Verify token validity with backend
     apiGetMe()
       .then((me) => {
-        clearTimeout(timeout);
-        if (isMounted) {
-          setAuthorized(true);
-          // Route Guard for Site Supervisor: only Overview and Projects allowed
-          const role = me?.role || "";
-          if (role === "Site Supervisor" || role === "SITE_SUPERVISOR") {
-            const isAllowed =
-              pathname === "/" ||
-              pathname === "/overview" ||
-              pathname.startsWith("/projects");
-            if (!isAllowed) {
-              router.replace("/overview");
-            }
+        if (!isMounted) return;
+        setAuthorized(true);
+        const role = me?.role || "";
+        if (role === "Site Supervisor" || role === "SITE_SUPERVISOR") {
+          const isAllowed =
+            pathname === "/" ||
+            pathname === "/overview" ||
+            pathname.startsWith("/projects");
+          if (!isAllowed) {
+            router.replace("/overview");
           }
         }
       })
       .catch((err: any) => {
-        clearTimeout(timeout);
-        console.warn("Session verification error:", err?.message);
+        if (!isMounted) return;
         const status = err?.status;
         const msg = (err?.message || "").toLowerCase();
-        
-        // If 401, 403, expired, or invalid account
         if (
           status === 401 ||
           status === 403 ||
           msg.includes("expired") ||
           msg.includes("401") ||
           msg.includes("403") ||
-          msg.includes("missing") ||
           msg.includes("not authenticated") ||
-          msg.includes("does not exist") ||
           msg.includes("unauthorized")
         ) {
           clearStoredToken();
-          if (isMounted) {
-            setAuthorized(false);
-            window.location.replace("/login");
-          }
-        } else {
-          // If backend connection issue (e.g. offline / network error), allow access to cached session
-          if (isMounted) setAuthorized(true);
+          setAuthorized(false);
+          window.location.replace("/login");
         }
       });
 
     return () => {
       isMounted = false;
-      clearTimeout(timeout);
     };
-  }, [pathname, router]);
+  }, []);
 
   if (authorized === false) {
     return (
@@ -96,17 +94,6 @@ export default function DashboardLayout({
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 rounded-full border-2 border-slate-900 border-t-transparent animate-spin" />
           <span className="text-xs text-slate-500 font-medium">Redirecting to login...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (authorized === null) {
-    return (
-      <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 rounded-full border-2 border-slate-900 border-t-transparent animate-spin" />
-          <span className="text-xs text-slate-500 font-medium">Verifying session...</span>
         </div>
       </div>
     );

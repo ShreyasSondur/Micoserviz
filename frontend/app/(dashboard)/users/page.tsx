@@ -17,9 +17,15 @@ import {
 import { addActivityLog } from "@/lib/logsStore";
 
 export default function UsersPage() {
-  const [users, setUsers] = useState<UserItem[]>([]);
+  const [users, setUsers] = useState<UserItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredUsers();
+    return [];
+  });
   const [metrics, setMetrics] = useState<BackendUserMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") return getStoredUsers().length === 0;
+    return false;
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState("");

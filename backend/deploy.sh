@@ -90,7 +90,7 @@ pip install --upgrade pip
 if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     pip install -r "$SCRIPT_DIR/requirements.txt"
 fi
-pip install gunicorn uvicorn psycopg2-binary "psycopg[binary]" httpx openpyxl
+pip install gunicorn uvicorn psycopg2-binary "psycopg[binary]" httpx openpyxl reportlab boto3
 
 echo -e "\n${YELLOW}Running database schema migration & safeguards...${NC}"
 python "$SCRIPT_DIR/migrate_db.py"
@@ -132,10 +132,10 @@ NGINX_CONF="/etc/nginx/sites-available/microservice-backend"
 
 cat <<'EOF' > "$NGINX_CONF"
 server {
-    listen 80;
+    listen 80 default_server;
     listen [::]:80;
 
-    server_name 13.140.172.117.sslip.io;
+    server_name _ 13.140.172.117.sslip.io;
 
     client_max_body_size 100M;
 
@@ -156,13 +156,16 @@ server {
 }
 EOF
 
-# Enable site without deleting other existing sites
+# Disable default nginx site if present to avoid port 80 collision
+rm -f /etc/nginx/sites-enabled/default
+
+# Enable site
 ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/microservice-backend
 
 # Test Nginx and reload
 nginx -t
 systemctl reload nginx
-echo -e "${GREEN}✓ Dedicated Nginx server block active for 13.140.172.117.sslip.io (proxying to port 8080).${NC}"
+echo -e "${GREEN}✓ Dedicated Nginx server block active (proxying to port 8080).${NC}"
 
 # 8. Health Check Verification
 echo -e "\n${YELLOW}[8/8] Verifying backend health...${NC}"
@@ -170,7 +173,7 @@ sleep 3
 
 PUBLIC_IP=$(curl -s https://api.ipify.org || curl -s ifconfig.me || echo "YOUR_VPS_IP")
 
-HEALTH_STATUS=$(curl -s http://127.0.0.1:8000/health || echo "FAILED")
+HEALTH_STATUS=$(curl -s http://127.0.0.1:8080/health || curl -s http://127.0.0.1:8000/health || echo "FAILED")
 
 echo -e "\n${GREEN}======================================================${NC}"
 echo -e "${GREEN}    🎉 MicroService ERP Backend Deployed Successfully! ${NC}"

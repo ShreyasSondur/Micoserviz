@@ -67,12 +67,16 @@ wheels/
 
 # Databases & SQLite
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 microservice.db
 backend/microservice.db
 
 # Uploaded Files & Local Storage
+uploads/
+**/uploads/
 storage/
 **/storage/MicroServiceData/*
 !storage/.gitkeep

@@ -68,10 +68,24 @@ function HighlightMatch({ text, query }: { text: string; query: string }) {
 }
 
 export default function InventoryPage() {
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
-  const [parts, setParts] = useState<BackendPartItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<InventoryItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredInventory();
+    return [];
+  });
+  const [invoices, setInvoices] = useState<InvoiceItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredInvoices();
+    return [];
+  });
+  const [parts, setParts] = useState<BackendPartItem[]>(() => {
+    if (typeof window !== "undefined") return getStoredParts();
+    return [];
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return getStoredInventory().length === 0;
+    }
+    return false;
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState("");
@@ -683,7 +697,7 @@ export default function InventoryPage() {
         </div>
 
         {/* Master Inventory Table: SN | Part Number | Product Name | Description | Action */}
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto table-deferred-container">
           <table className="w-full text-left min-w-[700px]">
             <thead>
               <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
