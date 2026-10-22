@@ -32,15 +32,17 @@ echo -e "${GREEN}[1/8] Working directory:${NC} $SCRIPT_DIR"
 
 # 2. Environment File Setup
 echo -e "\n${YELLOW}[2/8] Setting up .env configuration...${NC}"
-if [ -f "$SCRIPT_DIR/deploy.env" ]; then
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    echo -e "${GREEN}✓ Existing .env found and preserved (no overwrite).${NC}"
+elif [ -f "$SCRIPT_DIR/deploy.env" ]; then
     cp "$SCRIPT_DIR/deploy.env" "$SCRIPT_DIR/.env"
-    echo -e "${GREEN}✓ Successfully generated .env from deploy.env${NC}"
+    echo -e "${GREEN}✓ Generated initial .env from deploy.env${NC}"
 elif [ -f "$SCRIPT_DIR/.env.production" ]; then
     cp "$SCRIPT_DIR/.env.production" "$SCRIPT_DIR/.env"
-    echo -e "${GREEN}✓ Successfully generated .env from .env.production${NC}"
-elif [ ! -f "$SCRIPT_DIR/.env" ]; then
-    echo -e "${YELLOW}Warning: Neither deploy.env nor .env was found. Copying .env.example...${NC}"
+    echo -e "${GREEN}✓ Generated initial .env from .env.production${NC}"
+else
     cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+    echo -e "${YELLOW}Warning: Neither deploy.env nor .env was found. Copied .env.example.${NC}"
 fi
 
 # 3. Install System Packages
