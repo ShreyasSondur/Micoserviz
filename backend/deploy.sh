@@ -113,7 +113,7 @@ User=root
 WorkingDirectory=$SCRIPT_DIR
 EnvironmentFile=$SCRIPT_DIR/.env
 Environment="PATH=$SCRIPT_DIR/.venv/bin"
-ExecStart=$SCRIPT_DIR/.venv/bin/gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8080
+ExecStart=$SCRIPT_DIR/.venv/bin/gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8080 --timeout 120 --keep-alive 5
 Restart=always
 RestartSec=5
 StandardOutput=journal

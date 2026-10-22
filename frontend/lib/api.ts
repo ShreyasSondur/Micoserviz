@@ -155,8 +155,7 @@ export interface ResendOTPResponse {
 export async function checkBackendHealth(): Promise<{ ok: boolean; data?: BackendHealthResponse; error?: string }> {
   try {
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    // Allow up to 35 seconds for Render free tier spinning up from sleep
-    const timeoutId = controller ? setTimeout(() => controller.abort(), 35000) : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 45000) : null;
     const res = await fetch(`${BACKEND_ROOT_URL}/health`, {
       method: "GET",
       headers: {
@@ -337,12 +336,13 @@ function getAuthHeaders(): HeadersInit {
 }
 
 /**
- * Universal backend request helper with clean error messages
+ * Universal backend request helper with clean error messages, 60s timeout, and auto-retry
  */
-async function fetchBackendJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+async function fetchBackendJson<T>(url: string, options: RequestInit = {}, retries: number = 1): Promise<T> {
   let res: Response;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  // 60-second generous timeout so large project dossiers, heavy queries, or slower connections never terminate early
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
 
   try {
     res = await fetch(url, {
@@ -351,8 +351,13 @@ async function fetchBackendJson<T>(url: string, options: RequestInit = {}): Prom
     });
   } catch (err: any) {
     clearTimeout(timeoutId);
+    // Automatic retry once after 500ms for temporary transient network glitches
+    if (retries > 0 && err?.name !== "AbortError") {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return fetchBackendJson<T>(url, options, retries - 1);
+    }
     if (err?.name === "AbortError") {
-      throw new Error(`Request timed out connecting to ${url}`);
+      throw new Error(`Request timed out after 60s connecting to ${url}`);
     }
     const errorMsg = err?.message || String(err);
     if (
