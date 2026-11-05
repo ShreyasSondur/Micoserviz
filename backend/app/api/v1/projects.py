@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from typing import List, Optional, Union
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -391,7 +391,7 @@ def get_projects(db: Session = Depends(get_db)):
                         size=str(d.get("size", "")),
                         date=str(d.get("date", "")),
                         fileType=d.get("fileType", None),
-                        fileUrl=d.get("fileUrl") if d.get("fileUrl") and not str(d.get("fileUrl", "")).startswith("data:") else None,
+                        fileUrl=d.get("fileUrl") or None,
                     )
                     for d in (s.documents or [])
                 ],

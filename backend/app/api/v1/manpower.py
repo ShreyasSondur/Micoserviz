@@ -179,7 +179,8 @@ def get_manpower_attendance(
         distinct_dates_worked.add(d_str)
         if key not in attendance_map:
             attendance_map[key] = {}
-        attendance_map[key][d_str] = attendance_map[key].get(d_str, 0) + (r.hours_worked or 8)
+        hw = r.hours_worked if r.hours_worked is not None else 8
+        attendance_map[key][d_str] = attendance_map[key].get(d_str, 0) + hw
 
     return {
         "workers": [

@@ -9,7 +9,7 @@ import {
 } from "@/assets/icons";
 import { StatCard } from "@/components/StatCard";
 import { ActiveTaskListCard } from "@/components/ActiveTaskListCard";
-import { API_BASE_URL } from "@/lib/api";
+import { API_BASE_URL, getStoredToken } from "@/lib/api";
 
 interface BackendProjectResponse {
   id: number;
@@ -54,7 +54,10 @@ export default function OverviewPage() {
     let isMounted = true;
     const fetchStats = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/projects`, { cache: "no-store" });
+        const token = getStoredToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch(`${API_BASE_URL}/projects`, { cache: "no-store", headers });
         if (res.ok) {
           const data = (await res.json()) as BackendProjectResponse[];
           if (Array.isArray(data) && isMounted) {
@@ -64,7 +67,7 @@ export default function OverviewPage() {
             const needsAttention = data.filter(
               (p) =>
                 !p.is_completed &&
-                (p.priority?.toLowerCase() === "high" || p.priority_level === "high")
+                (p.priority?.toLowerCase() === "high" || p.priority_level?.toLowerCase() === "high")
             ).length;
 
             setStats({

@@ -58,8 +58,8 @@ class B2StorageService:
         Uploads raw bytes to the Backblaze B2 bucket under the given key.
         Direct cloud upload without creating local storage artifacts.
         """
-        # Clean key path (no leading slashes)
-        clean_key = key.lstrip("/").replace("\\", "/")
+        # Clean key path (prevent path traversal)
+        clean_key = re.sub(r"\.\.+[/\\Release]*", "", key.replace("\\", "/")).lstrip("/")
 
         result = {
             "key": clean_key,
@@ -122,7 +122,7 @@ class B2StorageService:
 
     def file_exists(self, key: str) -> bool:
         """Checks if an object exists in Backblaze B2 or local cache."""
-        clean_key = key.lstrip("/").replace("\\", "/")
+        clean_key = re.sub(r"\.\.+[/\\Release]*", "", key.replace("\\", "/")).lstrip("/")
         s3 = self.client
         if s3:
             try:
@@ -137,7 +137,7 @@ class B2StorageService:
 
     def download_bytes(self, key: str) -> Optional[bytes]:
         """Downloads an object directly from Backblaze B2 or local cache fallback."""
-        clean_key = key.lstrip("/").replace("\\", "/")
+        clean_key = re.sub(r"\.\.+[/\\Release]*", "", key.replace("\\", "/")).lstrip("/")
         s3 = self.client
         if s3:
             try:

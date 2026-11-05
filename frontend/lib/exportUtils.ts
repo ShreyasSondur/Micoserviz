@@ -1,4 +1,4 @@
-import { BackendCostingItem, BackendResourceItem, BackendSiteExecutionLog, BackendSOAItem } from "@/lib/api";
+import { BackendCostingItem, BackendResourceItem, BackendSiteExecutionLog, BackendSOAItem, getStoredToken } from "@/lib/api";
 
 /**
  * Helper to convert an image URL or blob URL into a high-definition base64 Data URL for jsPDF embedding.
@@ -23,7 +23,10 @@ const getImageDataUrl = async (url: string): Promise<{ dataUrl: string; width: n
 
   // 2. Try fetching as Blob first (works cleanly with CORS headers or same-origin / proxy)
   try {
-    const res = await fetch(url, { mode: "cors" });
+    const token = getStoredToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(url, { mode: "cors", headers });
     if (res.ok) {
       const blob = await res.blob();
       if (blob && blob.type.startsWith("image/")) {
@@ -342,6 +345,13 @@ export const exportSOAToExcel = async (params: {
   if (items.length === 0) {
     sheetData.push(["-", "-", "-", "-", "No SOA entries recorded", 0, 0, 0, "-", "-"]);
   } else {
+    const parseCleanNum = (val: any) => {
+      if (typeof val === "number") return val;
+      if (!val) return 0;
+      const clean = String(val).replace(/[^0-9.-]/g, "");
+      const n = parseFloat(clean);
+      return isNaN(n) ? 0 : n;
+    };
     items.forEach((item) => {
       sheetData.push([
         item.stage_number ? `Stage ${item.stage_number}` : "-",
@@ -349,9 +359,9 @@ export const exportSOAToExcel = async (params: {
         item.po_no || "-",
         item.document_no || "-",
         item.doc_type || "-",
-        Number(item.value) || 0,
-        Number(item.received) || 0,
-        Number(item.balance) || 0,
+        parseCleanNum(item.value),
+        parseCleanNum(item.received),
+        parseCleanNum(item.balance),
         item.mode || "-",
         item.remarks || "-",
       ]);
@@ -1517,7 +1527,8 @@ export const generateDocumentProofPdf = async (params: {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
-  doc.text(`Document Name: ${docName}`, margin + 5, y + 18);
+  const truncatedDocName = (docName || "").length > 42 ? (docName || "").slice(0, 39) + "..." : (docName || "Project Document");
+  doc.text(`Document Name: ${truncatedDocName}`, margin + 5, y + 18);
   doc.text(`Project Code: #${projectCode}`, margin + 5, y + 26);
   if (stageName) doc.text(`Stage / Phase: ${stageName}`, margin + 5, y + 34);
   doc.text(`Date Recorded: ${date || new Date().toLocaleDateString()}`, margin + 5, y + 42);
@@ -1625,7 +1636,8 @@ export const generateSOAReceiptPdf = async (params: {
 
   doc.setFontSize(14);
   doc.setTextColor(16, 185, 129); // Emerald-600
-  doc.text(`AED ${amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, margin + 100, y + 29);
+  const safeAmount = typeof amount === "number" && !isNaN(amount) ? amount : (parseFloat(String(amount || 0).replace(/[^0-9.-]/g, "")) || 0);
+  doc.text(`AED ${safeAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, margin + 100, y + 29);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);

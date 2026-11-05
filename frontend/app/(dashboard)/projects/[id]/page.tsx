@@ -199,9 +199,12 @@ export default function ProjectDetailsPage() {
         const newLevel = (newPriority === "High" ? "high" : newPriority === "Medium" ? "medium" : "low") as "high" | "medium" | "low";
         setProjectInfo((prev) => ({ ...prev, priority: newPriority, priorityLevel: newLevel }));
         try {
+          const token = getStoredToken();
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (token) headers["Authorization"] = `Bearer ${token}`;
           await fetch(`${API_BASE_URL}/projects/${rawId}`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ priority: newPriority }),
           });
         } catch { }
@@ -887,6 +890,10 @@ export default function ProjectDetailsPage() {
       setProcurementItems(updatedProc.map((p, idx) => mapBackendToProcurementItem(p, idx)));
 
       window.dispatchEvent(new CustomEvent("inventory_store_update"));
+      setSelectedSourceProjectKey("");
+      setSelectedShiftPart("");
+      setShiftQuantity(1);
+      setShiftNotes("");
       setIsShiftModalOpen(false);
     } catch (err: any) {
       console.error("Shift item error", err);
@@ -1075,7 +1082,7 @@ export default function ProjectDetailsPage() {
       showToast(`Successfully added ${created.name} (${selectedHoursWorked} hrs) for ${formatResourceDateLabel(targetDate)}`);
       addActivityLog({
         projectName: projectInfo.name,
-        module: "Costing",
+        module: "Resource Planning",
         action: `Added resource member: ${created.name} (${selectedHoursWorked} hrs) for ${formatResourceDateLabel(targetDate)}`,
         projectKey: rawId,
       });
@@ -1103,7 +1110,7 @@ export default function ProjectDetailsPage() {
           showToast(`Removed member ${name}`);
           addActivityLog({
             projectName: projectInfo.name,
-            module: "Costing",
+            module: "Resource Planning",
             action: `Removed resource member: ${name}`,
             projectKey: rawId,
           });
@@ -1457,7 +1464,7 @@ export default function ProjectDetailsPage() {
       return acc + (parseFloat(clean) || 0);
     }, 0);
     const totalFromSOA = soaItems.reduce((acc, it) => acc + (Number(it.value) || 0), 0);
-    const totalContract = commercialTotal > 0 ? commercialTotal : (totalFromSOA > 0 ? totalFromSOA : (parseFloat((projectInfo.budget || "").replace(/[^0-9.-]/g, "")) || 0));
+    const totalContract = commercialTotal > 0 ? commercialTotal : (totalFromSOA > 0 ? totalFromSOA : (parseFloat((projectInfo?.budget || "").replace(/[^0-9.-]/g, "")) || 0));
     const received = soaItems.reduce((acc, it) => acc + (Number(it.received) || 0), 0);
     const balance = Math.max(0, totalContract - received);
 
@@ -1695,9 +1702,42 @@ export default function ProjectDetailsPage() {
   const handleDownloadDoc = (doc: DocumentItem) => {
     try {
       if (doc.fileUrl) {
+        // Convert data: URL to Blob for proper download (avoids browser blocking)
+        if (doc.fileUrl.startsWith("data:")) {
+          try {
+            const [header, base64] = doc.fileUrl.split(",");
+            const mime = header.split(":")[1]?.split(";")[0] || "application/octet-stream";
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: mime });
+            const blobUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = blobUrl;
+            anchor.download = doc.name || "document";
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+            showToast(`Downloading: ${doc.name}`);
+            return;
+          } catch {
+            // fallback to direct href
+            const anchor = document.createElement("a");
+            anchor.href = doc.fileUrl;
+            anchor.download = doc.name || "document";
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+            showToast(`Downloading: ${doc.name}`);
+            return;
+          }
+        }
+        // HTTP URL - direct download
         const anchor = document.createElement("a");
         anchor.href = doc.fileUrl;
-        anchor.download = doc.name || "document.pdf";
+        anchor.download = doc.name || "document";
+        anchor.target = "_blank";
         document.body.appendChild(anchor);
         anchor.click();
         document.body.removeChild(anchor);
@@ -1705,7 +1745,7 @@ export default function ProjectDetailsPage() {
         return;
       }
 
-      // Generate verified authentic PDF document
+      // No file data available - generate a metadata proof PDF
       generateDocumentProofPdf({
         projectName: projectInfo.name,
         projectCode: String(projectInfo.code || rawId),
@@ -1715,15 +1755,112 @@ export default function ProjectDetailsPage() {
         status: "Verified Official",
       });
 
-      showToast(`Downloaded verified document: ${doc.name}`);
+      showToast(`Downloaded document record: ${doc.name}`);
     } catch (err) {
       console.error("Error downloading file", err);
       showToast(`Failed to download: ${doc.name}`);
     }
   };
 
+  // Open document in browser (view/preview)
+  const handleViewDoc = (doc: DocumentItem) => {
+    try {
+      if (doc.fileUrl) {
+        if (doc.fileUrl.startsWith("data:")) {
+          try {
+            const [header, base64] = doc.fileUrl.split(",");
+            const mime = header.split(":")[1]?.split(";")[0] || "application/octet-stream";
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: mime });
+            const blobUrl = URL.createObjectURL(blob);
+            const win = window.open(blobUrl, "_blank");
+            if (!win) {
+              // Popup blocked - fallback to download
+              handleDownloadDoc(doc);
+            } else {
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+            }
+            return;
+          } catch {
+            // fallback
+            window.open(doc.fileUrl, "_blank");
+            return;
+          }
+        }
+        // HTTP URL
+        window.open(doc.fileUrl, "_blank");
+        return;
+      }
+      // No file - show info toast
+      showToast(`No file attached to "${doc.name}". Use download to get the document record.`);
+    } catch (err) {
+      console.error("Error viewing file", err);
+      showToast(`Failed to open: ${doc.name}`);
+    }
+  };
+
   // Full Project Dossier PDF Generator State & Action
   const [isGeneratingDossierPdf, setIsGeneratingDossierPdf] = useState(false);
+
+  // Overall milestone calculations
+  const allSectionStatuses = useMemo(() => [
+    commercialStatus,
+    engineeringStatus,
+    budgetStatus,
+    procurementStatus,
+    soaStatus,
+    resourceStatus,
+    siteExecutionStatus,
+  ], [commercialStatus, engineeringStatus, budgetStatus, procurementStatus, soaStatus, resourceStatus, siteExecutionStatus]);
+
+  const completedSectionsCount = useMemo(
+    () => allSectionStatuses.filter((s) => s === "completed").length,
+    [allSectionStatuses]
+  );
+
+  const dynamicCurrentStage = useMemo(() => {
+    if (completedSectionsCount >= 7) return 7;
+    return Math.max(1, completedSectionsCount + 1);
+  }, [completedSectionsCount]);
+
+  const inProgressSectionsCount = useMemo(
+    () => allSectionStatuses.filter((s) => s === "in_progress").length,
+    [allSectionStatuses]
+  );
+
+  const overallCompletionPercent = useMemo(() => {
+    return Math.min(100, Math.max(0, verifiedProgressPercentage));
+  }, [verifiedProgressPercentage]);
+
+  // Currency formatter helper
+  const formatAed = (val?: string) => {
+    if (!val || !val.trim()) return "";
+    const trimmed = val.trim();
+    return trimmed.toUpperCase().includes("AED") ? trimmed : `${trimmed} AED`;
+  };
+
+  // Total dynamic contract value calculated across all Commercial Stages (fallback to project budget)
+  const primaryContractValue = useMemo(() => {
+    let hasValue = false;
+    const total = commercialBlocks.reduce((acc, b) => {
+      if (b.contractValue && b.contractValue.trim()) {
+        const clean = b.contractValue.replace(/[^0-9.-]/g, "");
+        const num = parseFloat(clean);
+        if (!isNaN(num)) {
+          hasValue = true;
+          return acc + num;
+        }
+      }
+      return acc;
+    }, 0);
+
+    if (hasValue) {
+      return `${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AED`;
+    }
+    return projectInfo?.budget || "";
+  }, [commercialBlocks, projectInfo?.budget]);
 
   const handleDownloadProjectDossier = async () => {
     setIsGeneratingDossierPdf(true);
@@ -2034,9 +2171,12 @@ export default function ProjectDetailsPage() {
     }
 
     try {
+      const token = getStoredToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           is_saved: true,
           po_number: poTrim,
@@ -2104,9 +2244,12 @@ export default function ProjectDetailsPage() {
       actionType: "warning",
       onSuccess: async () => {
         try {
+          const token = getStoredToken();
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (token) headers["Authorization"] = `Bearer ${token}`;
           const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ is_saved: false }),
           });
           if (res.ok) {
@@ -2127,12 +2270,16 @@ export default function ProjectDetailsPage() {
 
   // Add another Commercial stage block (loopable repeating step created on backend)
   const handleAddCommercialBlock = async () => {
-    const nextNum = commercialBlocks.length + 1;
+    const maxExisting = commercialBlocks.reduce((max, b) => Math.max(max, b.stageNumber || 0), 0);
+    const nextNum = maxExisting + 1;
 
     try {
+      const token = getStoredToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           stage_number: nextNum,
           status: "in_progress",
@@ -2201,8 +2348,12 @@ export default function ProjectDetailsPage() {
       actionType: "danger",
       onSuccess: async () => {
         try {
+          const token = getStoredToken();
+          const headers: Record<string, string> = {};
+          if (token) headers["Authorization"] = `Bearer ${token}`;
           const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}`, {
             method: "DELETE",
+            headers,
           });
           if (res.ok) {
             setCommercialBlocks((prev) => {
@@ -2260,33 +2411,24 @@ export default function ProjectDetailsPage() {
                 ? `${(f.size / 1024).toFixed(1)} KB`
                 : `${(f.size / (1024 * 1024)).toFixed(1)} MB`;
 
-            if (f.size <= 8 * 1024 * 1024) {
-              const reader = new FileReader();
-              reader.onload = () => {
-                resolve({
-                  name: f.name,
-                  size: formattedSize,
-                  dataUrl: (reader.result as string) || "",
-                  type: f.type || "application/octet-stream",
-                });
-              };
-              reader.onerror = () => {
-                resolve({
-                  name: f.name,
-                  size: formattedSize,
-                  dataUrl: "",
-                  type: f.type || "application/octet-stream",
-                });
-              };
-              reader.readAsDataURL(f);
-            } else {
+            const reader = new FileReader();
+            reader.onload = () => {
+              resolve({
+                name: f.name,
+                size: formattedSize,
+                dataUrl: (reader.result as string) || "",
+                type: f.type || "application/octet-stream",
+              });
+            };
+            reader.onerror = () => {
               resolve({
                 name: f.name,
                 size: formattedSize,
                 dataUrl: "",
                 type: f.type || "application/octet-stream",
               });
-            }
+            };
+            reader.readAsDataURL(f);
           })
       )
     ).then((newItems) => {
@@ -2553,64 +2695,6 @@ export default function ProjectDetailsPage() {
     }
   };
 
-  // Currency formatter helper
-  const formatAed = (val?: string) => {
-    if (!val || !val.trim()) return "";
-    const trimmed = val.trim();
-    return trimmed.toUpperCase().includes("AED") ? trimmed : `${trimmed} AED`;
-  };
-
-  // Total dynamic contract value calculated across all Commercial Stages (fallback to project budget)
-  const primaryContractValue = useMemo(() => {
-    let hasValue = false;
-    const total = commercialBlocks.reduce((acc, b) => {
-      if (b.contractValue && b.contractValue.trim()) {
-        const clean = b.contractValue.replace(/[^0-9.-]/g, "");
-        const num = parseFloat(clean);
-        if (!isNaN(num)) {
-          hasValue = true;
-          return acc + num;
-        }
-      }
-      return acc;
-    }, 0);
-
-    if (hasValue) {
-      return `${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AED`;
-    }
-    return projectInfo.budget || "";
-  }, [commercialBlocks, projectInfo.budget]);
-
-  // Overall milestone calculations
-  const allSectionStatuses = useMemo(() => [
-    commercialStatus,
-    engineeringStatus,
-    budgetStatus,
-    procurementStatus,
-    soaStatus,
-    resourceStatus,
-    siteExecutionStatus,
-  ], [commercialStatus, engineeringStatus, budgetStatus, procurementStatus, soaStatus, resourceStatus, siteExecutionStatus]);
-
-  const completedSectionsCount = useMemo(
-    () => allSectionStatuses.filter((s) => s === "completed").length,
-    [allSectionStatuses]
-  );
-
-  const dynamicCurrentStage = useMemo(() => {
-    if (completedSectionsCount >= 7) return 7;
-    return Math.max(1, completedSectionsCount + 1);
-  }, [completedSectionsCount]);
-
-  const inProgressSectionsCount = useMemo(
-    () => allSectionStatuses.filter((s) => s === "in_progress").length,
-    [allSectionStatuses]
-  );
-
-  const overallCompletionPercent = useMemo(() => {
-    return Math.min(100, Math.max(0, verifiedProgressPercentage));
-  }, [verifiedProgressPercentage]);
-
   return (
     <div className="space-y-6 sm:space-y-7 animate-in fade-in duration-200 pb-24 max-w-7xl mx-auto">
       {/* Toast Notification Alert - High z-index to always stay above modals */}
@@ -2874,7 +2958,9 @@ export default function ProjectDetailsPage() {
             </div>
             <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/60">
               <span className="text-[10px] uppercase font-bold text-slate-400 block">Internal Costing</span>
-              <span className="text-xs sm:text-sm font-bold text-slate-900 mt-0.5 block font-mono">—</span>
+              <span className="text-xs sm:text-sm font-bold text-slate-900 mt-0.5 block font-mono">
+                {internalCosting ? `${internalCosting} AED` : "—"}
+              </span>
             </div>
             <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200/60">
               <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Contract Value</span>
@@ -3204,25 +3290,17 @@ export default function ProjectDetailsPage() {
                                 </div>
 
                                   <div className="flex items-center gap-1.5">
-                                    {doc.fileUrl && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          if (doc.fileUrl?.startsWith("data:") || doc.fileUrl?.startsWith("http")) {
-                                            window.open(doc.fileUrl, "_blank");
-                                          } else {
-                                            handleDownloadDoc(doc);
-                                          }
-                                        }}
-                                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
-                                        title="Preview in new tab"
-                                      >
-                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-                                          <circle cx="12" cy="12" r="3" />
-                                        </svg>
-                                      </button>
-                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleViewDoc(doc)}
+                                      className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                      title={doc.fileUrl ? "Preview in new tab" : "No file attached"}
+                                    >
+                                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                      </svg>
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => handleDownloadDoc(doc)}
@@ -3449,25 +3527,17 @@ export default function ProjectDetailsPage() {
                                 </div>
 
                                 <div className="flex items-center gap-1.5">
-                                  {doc.fileUrl && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (doc.fileUrl?.startsWith("data:") || doc.fileUrl?.startsWith("http")) {
-                                          window.open(doc.fileUrl, "_blank");
-                                        } else {
-                                          handleDownloadDoc(doc);
-                                        }
-                                      }}
-                                      className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
-                                      title="Preview in new tab"
-                                    >
-                                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-                                        <circle cx="12" cy="12" r="3" />
-                                      </svg>
-                                    </button>
-                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleViewDoc(doc)}
+                                    className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                    title={doc.fileUrl ? "Preview in new tab" : "No file attached"}
+                                  >
+                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                                      <circle cx="12" cy="12" r="3" />
+                                    </svg>
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => handleDownloadDoc(doc)}

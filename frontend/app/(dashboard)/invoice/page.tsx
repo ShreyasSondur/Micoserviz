@@ -1,6 +1,6 @@
 "use client";
 
-import { getUserRole, isAdmin } from "@/lib/api";
+import { getUserRole, isAdmin, getStoredToken } from "@/lib/api";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
@@ -150,9 +150,7 @@ export default function InvoicePage() {
 
     const loadBlob = async () => {
       try {
-        const token = typeof window !== "undefined"
-          ? localStorage.getItem("microservice_auth_token_v2") || sessionStorage.getItem("microservice_auth_token_v2")
-          : null;
+        const token = getStoredToken();
         const headers: Record<string, string> = {};
         if (token) headers["Authorization"] = `Bearer ${token}`;
 

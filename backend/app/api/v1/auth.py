@@ -34,8 +34,10 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     password = request.password
 
     # 1. Check for Admin Special Access match from .env
+    admin_pw_set = bool(settings.ADMIN_PASSWORD and settings.ADMIN_PASSWORD.strip())
     is_env_admin_match = (
-        (identifier == settings.ADMIN_USERNAME.lower() or identifier == settings.ADMIN_EMAIL.lower())
+        admin_pw_set
+        and (identifier == settings.ADMIN_USERNAME.lower() or identifier == settings.ADMIN_EMAIL.lower())
         and password == settings.ADMIN_PASSWORD
     )
 
@@ -224,7 +226,7 @@ def verify_admin_password(
         )
 
     # 1. Match against .env ADMIN_PASSWORD
-    if entered_pw == settings.ADMIN_PASSWORD:
+    if settings.ADMIN_PASSWORD and settings.ADMIN_PASSWORD.strip() and entered_pw == settings.ADMIN_PASSWORD:
         return {"valid": True, "message": "Admin password verified successfully"}
 
     # 2. Match against any Admin user's hashed password in DB

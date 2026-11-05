@@ -55,9 +55,7 @@ export function Sidebar() {
   useEffect(() => {
     const syncUser = () => {
       const u = getStoredUser();
-      if (u) {
-        setCurrentUser(u);
-      }
+      setCurrentUser(u);
     };
 
     syncUser();

@@ -643,7 +643,8 @@ def generate_site_execution_pdf_bytes(
                     log_elements.append(img_table)
 
             log_elements.append(Spacer(1, 14))
-            elements.append(KeepTogether(log_elements))
+            for el in log_elements:
+                elements.append(el)
 
     # Page number and footer canvas callback
     def add_footer(canvas, doc):
