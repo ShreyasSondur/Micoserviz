@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { HomeAutomationIcon } from "@/assets/icons";
-import { apiVerifyOTP, apiResendOTP, API_BASE_URL } from "@/lib/api";
+import { apiVerifyOTP, apiResendOTP } from "@/lib/api";
 
 function OTPVerificationContent() {
   const router = useRouter();
@@ -178,10 +178,6 @@ function OTPVerificationContent() {
             </p>
           </div>
 
-          {/* Backend Connection Indicator */}
-          <div className="mb-4 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500 truncate" title={API_BASE_URL}>
-            API Endpoint: <span className="font-mono text-slate-700 font-medium">{API_BASE_URL}</span>
-          </div>
 
           {/* Dev / Direct Access OTP Banner (when SMTP is blocked or in dev mode) */}
           {devOtp && (

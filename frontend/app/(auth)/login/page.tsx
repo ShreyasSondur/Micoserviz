@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { HomeAutomationIcon } from "@/assets/icons";
-import { apiLogin, API_BASE_URL, checkBackendHealth } from "@/lib/api";
+import { apiLogin, checkBackendHealth } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -95,30 +95,13 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Backend Connection Indicator */}
-          <div className="mb-4 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-between text-[11px]">
-            <span className="text-slate-500 truncate max-w-[200px]" title={API_BASE_URL}>
-              API: <span className="font-mono text-slate-700 font-medium">{API_BASE_URL}</span>
-            </span>
-            <span
-              className={`inline-flex items-center gap-1 font-medium ${backendOnline === true
-                ? "text-emerald-600"
-                : backendOnline === false
-                  ? "text-amber-600"
-                  : "text-slate-400"
-                }`}
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${backendOnline === true
-                  ? "bg-emerald-500 animate-pulse"
-                  : backendOnline === false
-                    ? "bg-amber-500 animate-pulse"
-                    : "bg-slate-300"
-                  }`}
-              />
-              {backendOnline === true ? "Online" : backendOnline === false ? "Waking server..." : "Checking..."}
-            </span>
-          </div>
+          {/* Server wake-up notice (only shown if backend is starting up) */}
+          {backendOnline === false && (
+            <div className="mb-4 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200/80 text-[11px] text-amber-800 flex items-center gap-2 animate-in fade-in duration-200">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse flex-shrink-0" />
+              <span>Connecting to secure server... Please wait a moment.</span>
+            </div>
+          )}
 
           {/* Error Message */}
           {errorMessage && (
