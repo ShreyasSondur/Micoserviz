@@ -19,16 +19,22 @@ echo -e "\n${BLUE}======================================================${NC}"
 echo -e "${BLUE}    MicroService ERP - Automated VPS Setup & Deploy   ${NC}"
 echo -e "${BLUE}======================================================${NC}\n"
 
-# 1. Check Root Privileges
+# 1. Check Root Privileges (Auto-elevate if not root)
 if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}[ERROR] Please run this script with sudo or as root.${NC}"
-  echo -e "Example: sudo bash deploy.sh"
-  exit 1
+  echo -e "${YELLOW}Elevating privileges with sudo...${NC}"
+  exec sudo bash "$0" "$@"
 fi
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 cd "$SCRIPT_DIR"
 echo -e "${GREEN}[1/8] Working directory:${NC} $SCRIPT_DIR"
+
+# Safely check for and pull latest git changes if inside git repo
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || dirname "$SCRIPT_DIR")"
+if [ -d "$REPO_ROOT/.git" ]; then
+    echo -e "${YELLOW}Ensuring latest repository commits are pulled...${NC}"
+    git -C "$REPO_ROOT" pull origin main || git -C "$REPO_ROOT" pull || echo "Note: Proceeding with current code."
+fi
 
 # 2. Environment File Setup
 echo -e "\n${YELLOW}[2/8] Setting up .env configuration...${NC}"
@@ -125,8 +131,16 @@ EOF
 
 systemctl daemon-reload
 systemctl enable microservice-backend
+echo -e "${YELLOW}Restarting microservice-backend service...${NC}"
 systemctl restart microservice-backend
-echo -e "${GREEN}✓ microservice-backend.service active on port 8080.${NC}"
+sleep 2
+
+if systemctl is-active --quiet microservice-backend; then
+    echo -e "${GREEN}✓ microservice-backend.service active and running on port 8080.${NC}"
+else
+    echo -e "${RED}[WARNING] microservice-backend service is not active. Checking journal logs:${NC}"
+    journalctl -u microservice-backend -n 25 --no-pager
+fi
 
 # 7. Configure Dedicated Nginx Server Block (Preserving SSL if already configured)
 echo -e "\n${YELLOW}[7/8] Configuring Nginx Server Block...${NC}"
