@@ -1039,6 +1039,18 @@ def resolve_commercial_stage(project_key: str, stage_id: str, db: Session) -> Co
             documents_json="[]",
         )
         db.add(stage)
+        # Ensure corresponding engineering stage exists if missing
+        eng = db.query(EngineeringDocumentationStage).filter(
+            EngineeringDocumentationStage.project_key == p.project_key,
+            EngineeringDocumentationStage.stage_number == st_num,
+        ).first()
+        if not eng:
+            db.add(EngineeringDocumentationStage(
+                project_key=p.project_key,
+                stage_number=st_num,
+                status="in_progress",
+                documents_json="[]",
+            ))
         db.commit()
         db.refresh(stage)
     return stage
@@ -1284,6 +1296,22 @@ def resolve_engineering_stage(project_key: str, stage_id: str, db: Session) -> E
             documents_json="[]",
         )
         db.add(stage)
+        # Ensure corresponding commercial stage exists if missing
+        comm = db.query(CommercialApprovalStage).filter(
+            CommercialApprovalStage.project_key == p.project_key,
+            CommercialApprovalStage.stage_number == st_num,
+        ).first()
+        if not comm:
+            db.add(CommercialApprovalStage(
+                project_key=p.project_key,
+                stage_number=st_num,
+                status="in_progress",
+                po_number="",
+                po_date="",
+                contract_value="",
+                is_saved=False,
+                documents_json="[]",
+            ))
         db.commit()
         db.refresh(stage)
     return stage

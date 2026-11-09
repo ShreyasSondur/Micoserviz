@@ -129,6 +129,7 @@ export interface CommercialBlock {
   poDate: string;
   contractValue: string;
   isSaved: boolean;
+  isDraft?: boolean;
   documents: DocumentItem[];
 }
 
@@ -136,6 +137,7 @@ export interface EngineeringBlock {
   id: string;
   stageNumber: number;
   status: "in_progress" | "completed";
+  isDraft?: boolean;
   documents: DocumentItem[];
 }
 
@@ -2047,7 +2049,7 @@ export default function ProjectDetailsPage() {
           site_execution: siteExecutionStatus,
         },
         activityLogs: combinedTimeline,
-        commercialStages: commercialBlocks.map((b) => ({
+        commercialStages: commercialBlocks.filter((b) => !b.isDraft).map((b) => ({
           stageNumber: b.stageNumber,
           status: b.status,
           poNumber: b.poNumber,
@@ -2055,7 +2057,7 @@ export default function ProjectDetailsPage() {
           contractValue: b.contractValue,
           documents: b.documents,
         })),
-        engineeringStages: engineeringBlocks.map((b) => ({
+        engineeringStages: engineeringBlocks.filter((b) => !b.isDraft).map((b) => ({
           stageNumber: b.stageNumber,
           status: b.status,
           documents: b.documents,
@@ -2174,28 +2176,50 @@ export default function ProjectDetailsPage() {
       const token = getStoredToken();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}`, {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({
-          is_saved: true,
-          po_number: poTrim,
-          po_date: targetBlock.poDate || "",
-          contract_value: cvTrim,
-        }),
-      });
+
+      let res: Response;
+      if (targetBlock.isDraft) {
+        res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            stage_number: targetBlock.stageNumber,
+            status: targetBlock.status || "in_progress",
+            po_number: poTrim,
+            po_date: targetBlock.poDate || "",
+            contract_value: cvTrim,
+            is_saved: true,
+            documents: targetBlock.documents || [],
+          }),
+        });
+      } else {
+        res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial/${blockId}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            is_saved: true,
+            po_number: poTrim,
+            po_date: targetBlock.poDate || "",
+            contract_value: cvTrim,
+          }),
+        });
+      }
 
       if (res.ok) {
-        const updated = await res.json();
-        const savedContractVal = updated.contract_value || targetBlock.contractValue || "";
+        const savedData = await res.json();
+        const realId = String(savedData.id);
+        const savedContractVal = savedData.contract_value || targetBlock.contractValue || "";
+
         setCommercialBlocks((prev) => {
           const updatedBlocks = prev.map((block) => {
             if (block.id === blockId) {
               return {
                 ...block,
+                id: realId,
+                isDraft: false,
                 isSaved: true,
-                poNumber: updated.po_number || block.poNumber,
-                poDate: updated.po_date || block.poDate,
+                poNumber: savedData.po_number || block.poNumber,
+                poDate: savedData.po_date || block.poDate,
                 contractValue: savedContractVal,
               };
             }
@@ -2214,6 +2238,16 @@ export default function ProjectDetailsPage() {
           }
           return updatedBlocks;
         });
+
+        // Also update matching engineering stage draft status & id
+        setEngineeringBlocks((prev) =>
+          prev.map((eng) =>
+            eng.stageNumber === targetBlock.stageNumber || eng.id === blockId
+              ? { ...eng, id: realId, isDraft: false }
+              : eng
+          )
+        );
+
         showToast("Commercial approval details saved and locked!");
         const poPart = targetBlock.poNumber ? `PO #${targetBlock.poNumber}` : "No PO";
         const datePart = targetBlock.poDate ? `Date: ${targetBlock.poDate}` : "";
@@ -2268,73 +2302,61 @@ export default function ProjectDetailsPage() {
     });
   };
 
-  // Add another Commercial stage block (loopable repeating step created on backend)
-  const handleAddCommercialBlock = async () => {
+  // Add another Commercial stage block (created locally as a draft until saved or document uploaded)
+  const handleAddCommercialBlock = () => {
+    // Check if there is already an unsaved draft stage to prevent duplicate empty drafts
+    const existingDraft = commercialBlocks.find((b) => b.isDraft);
+    if (existingDraft) {
+      showToast(`Stage ${existingDraft.stageNumber} is still an unsaved draft. Please fill details and click SAVE or discard it before adding another stage.`);
+      return;
+    }
+
     const maxExisting = commercialBlocks.reduce((max, b) => Math.max(max, b.stageNumber || 0), 0);
     const nextNum = maxExisting + 1;
+    const draftId = `draft-stage-${nextNum}-${Date.now()}`;
 
-    try {
-      const token = getStoredToken();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE_URL}/projects/${rawId}/commercial`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          stage_number: nextNum,
-          status: "in_progress",
-          po_number: "",
-          po_date: "",
-          contract_value: "",
-          is_saved: false,
-          documents: [],
-        }),
-      });
+    const newBlock: CommercialBlock = {
+      id: draftId,
+      stageNumber: nextNum,
+      status: "in_progress",
+      poNumber: "",
+      poDate: "",
+      contractValue: "",
+      isSaved: false,
+      isDraft: true,
+      documents: [],
+    };
 
-      if (res.ok) {
-        const created = await res.json();
-        const newBlock: CommercialBlock = {
-          id: String(created.id),
-          stageNumber: created.stage_number || nextNum,
-          status: (created.status as "in_progress" | "completed") || "in_progress",
-          poNumber: created.po_number || "",
-          poDate: created.po_date || "",
-          contractValue: created.contract_value || "",
-          isSaved: Boolean(created.is_saved),
-          documents: Array.isArray(created.documents) ? created.documents : [],
-        };
-        setCommercialBlocks((prev) => [...prev, newBlock]);
+    // Also add matching stage card in Engineering & Documentation as draft
+    const newEngBlock: EngineeringBlock = {
+      id: draftId,
+      stageNumber: nextNum,
+      status: "in_progress",
+      isDraft: true,
+      documents: [],
+    };
 
-        // Also add stage card in Engineering & Documentation
-        const newEngBlock: EngineeringBlock = {
-          id: String(created.id),
-          stageNumber: created.stage_number || nextNum,
-          status: "in_progress",
-          documents: [],
-        };
-        setEngineeringBlocks((prev) => {
-          if (prev.some((e) => e.stageNumber === newEngBlock.stageNumber)) return prev;
-          return [...prev, newEngBlock];
-        });
+    setCommercialBlocks((prev) => [...prev, newBlock]);
+    setEngineeringBlocks((prev) => {
+      if (prev.some((e) => e.stageNumber === nextNum)) return prev;
+      return [...prev, newEngBlock];
+    });
 
-        showToast(`Added Commercial & Engineering Stage ${newBlock.stageNumber}`);
-        addActivityLog({
-          projectName: projectInfo.name,
-          module: "Commercial Approval",
-          action: `Added Stage ${newBlock.stageNumber} to Commercial & Engineering Approval`,
-          projectKey: rawId,
-        });
-      } else {
-        showToast("Failed to create new stage on server");
-      }
-    } catch (err) {
-      console.error("Failed to add stage", err);
-      showToast("Network error creating stage");
-    }
+    showToast(`Added Stage ${nextNum} (Draft). Enter details and click SAVE to keep it.`);
   };
 
-  // Delete a stage block (if not the only one, Requires Admin Password)
+  // Delete or discard a stage block
   const handleDeleteCommercialBlock = (blockId: string, stageNum: number) => {
+    const targetBlock = commercialBlocks.find((b) => b.id === blockId);
+
+    // If it's a draft stage, discard immediately without requiring Admin password or calling backend
+    if (targetBlock?.isDraft) {
+      setCommercialBlocks((prev) => prev.filter((b) => b.id !== blockId));
+      setEngineeringBlocks((prev) => prev.filter((b) => b.stageNumber !== stageNum && b.id !== blockId));
+      showToast(`Discarded draft Stage ${stageNum}`);
+      return;
+    }
+
     if (commercialBlocks.length <= 1) {
       showToast("At least one Commercial stage is required");
       return;
@@ -2457,7 +2479,8 @@ export default function ProjectDetailsPage() {
     setUploadSuccessMessage("");
 
     const targetStageNum = docModalTarget.stageNumber || 1;
-    const stageParam = String(docModalTarget.stageNumber || docModalTarget.blockId || 1);
+    const isDraftTarget = typeof docModalTarget.blockId === "string" && docModalTarget.blockId.startsWith("draft-");
+    const stageParam = isDraftTarget ? String(targetStageNum) : String(docModalTarget.stageNumber || docModalTarget.blockId || 1);
 
     const docsToUpload: DocumentItem[] =
       selectedFiles.length > 0
@@ -2511,6 +2534,7 @@ export default function ProjectDetailsPage() {
 
       if (res.ok) {
         const updatedStage = await res.json();
+        const realStageId = String(updatedStage.id || docModalTarget.blockId);
         setUploadProgress(100);
         const countText =
           docsToUpload.length === 1 ? `"${docsToUpload[0].name}"` : `${docsToUpload.length} documents`;
@@ -2522,11 +2546,20 @@ export default function ProjectDetailsPage() {
               block.id === docModalTarget.blockId || block.stageNumber === targetStageNum
                 ? {
                     ...block,
+                    id: realStageId,
+                    isDraft: false,
                     documents: Array.isArray(updatedStage.documents)
                       ? updatedStage.documents
                       : [...block.documents, ...docsToUpload],
                   }
                 : block
+            )
+          );
+          setEngineeringBlocks((prev) =>
+            prev.map((eng) =>
+              eng.stageNumber === targetStageNum
+                ? { ...eng, id: realStageId, isDraft: false }
+                : eng
             )
           );
         } else {
@@ -2535,11 +2568,20 @@ export default function ProjectDetailsPage() {
               block.id === docModalTarget.blockId || block.stageNumber === targetStageNum
                 ? {
                     ...block,
+                    id: realStageId,
+                    isDraft: false,
                     documents: Array.isArray(updatedStage.documents)
                       ? updatedStage.documents
                       : [...block.documents, ...docsToUpload],
                   }
                 : block
+            )
+          );
+          setCommercialBlocks((prev) =>
+            prev.map((comm) =>
+              comm.stageNumber === targetStageNum
+                ? { ...comm, id: realStageId, isDraft: false }
+                : comm
             )
           );
         }
@@ -3065,6 +3107,13 @@ export default function ProjectDetailsPage() {
                             <span>Stage {block.stageNumber}</span>
                           </span>
 
+                          {/* Draft Badge */}
+                          {block.isDraft && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              <span>Draft Stage</span>
+                            </span>
+                          )}
+
                           {/* Locked on Save Badge */}
                           {block.isSaved && (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -3077,20 +3126,35 @@ export default function ProjectDetailsPage() {
                           )}
                         </div>
 
-                        {/* Optional remove stage button if more than 1 block */}
-                        {isAdmin() && commercialBlocks.length > 1 && (
+                        {/* Discard Draft or Admin Remove Stage */}
+                        {block.isDraft ? (
                           <button
                             type="button"
                             onClick={() => handleDeleteCommercialBlock(block.id, block.stageNumber)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer text-xs flex items-center gap-1"
-                            title={`Remove Stage ${block.stageNumber}`}
+                            className="px-2.5 py-1 rounded-lg text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1 border border-rose-200"
+                            title={`Discard draft Stage ${block.stageNumber}`}
                           >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <polyline points="3 6 5 6 21 6" />
-                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                              <line x1="18" y1="6" x2="6" y2="18"></line>
+                              <line x1="6" y1="6" x2="18" y2="18"></line>
                             </svg>
-                            <span className="hidden sm:inline">Delete Stage</span>
+                            <span>Discard Draft</span>
                           </button>
+                        ) : (
+                          isAdmin() && commercialBlocks.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCommercialBlock(block.id, block.stageNumber)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer text-xs flex items-center gap-1"
+                              title={`Remove Stage ${block.stageNumber}`}
+                            >
+                              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                              </svg>
+                              <span className="hidden sm:inline">Delete Stage</span>
+                            </button>
+                          )
                         )}
                       </div>
 
@@ -3438,6 +3502,11 @@ export default function ProjectDetailsPage() {
                           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-extrabold bg-[#0c1033] text-white tracking-wide shadow-2xs">
                             <span>Stage {engBlock.stageNumber} Documents</span>
                           </span>
+                          {engBlock.isDraft && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              <span>Draft Stage</span>
+                            </span>
+                          )}
                           {engBlock.documents.length > 0 && (
                             <span className="text-xs font-semibold text-slate-400">
                               ({engBlock.documents.length} {engBlock.documents.length === 1 ? "file" : "files"})
@@ -3445,19 +3514,35 @@ export default function ProjectDetailsPage() {
                           )}
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openDocModal({
-                              type: "engineering",
-                              blockId: engBlock.id,
-                              stageNumber: engBlock.stageNumber,
-                            })
-                          }
-                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#1b1f63] hover:bg-[#262c8a] rounded-xl shadow-2xs transition-colors cursor-pointer"
-                        >
-                          <span>+ Add Document</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {engBlock.isDraft && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCommercialBlock(engBlock.id, engBlock.stageNumber)}
+                              className="px-2.5 py-1 rounded-lg text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1 border border-rose-200"
+                              title={`Discard draft Stage ${engBlock.stageNumber}`}
+                            >
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                              </svg>
+                              <span>Discard Draft</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openDocModal({
+                                type: "engineering",
+                                blockId: engBlock.id,
+                                stageNumber: engBlock.stageNumber,
+                              })
+                            }
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#1b1f63] hover:bg-[#262c8a] rounded-xl shadow-2xs transition-colors cursor-pointer"
+                          >
+                            <span>+ Add Document</span>
+                          </button>
+                        </div>
                       </div>
 
                       {/* Documents List for this Stage */}
